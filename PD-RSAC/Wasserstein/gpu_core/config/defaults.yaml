@@ -1,0 +1,115 @@
+# Default Configuration for GPU-native EV Fleet RL System
+
+environment:
+  num_vehicles: 1000
+  num_stations: 150
+  hex_resolution: 8
+  max_hexagons: 1500
+
+episode:
+  duration_hours: 24.0
+  step_duration_minutes: 5.0
+
+data:
+  parquet_path: "data/yellow_tripdata_2009-01.parquet"
+  cache_dir: "cache/trips"
+  trip_percentage: 0.3
+  prefetch_episodes: 5
+  start_date: "2009-01-01"
+
+training:
+  total_episodes: 1000
+  batch_size: 256
+  episode_batch_size: 4
+  learning_rate:
+    actor: 1.0e-4
+    critic: 1.0e-4
+    alpha: 1.0e-4
+  gamma: 0.99
+  tau: 0.005
+  warmup_steps: 5000
+  update_every: 1
+  mixed_precision: true
+  compile_model: true
+  max_grad_norm: 1.0
+
+replay_buffer:
+  capacity: 500000
+  prioritized: true
+  alpha: 0.6
+  beta_start: 0.4
+  beta_end: 1.0
+  beta_annealing_steps: 100000
+
+curriculum:
+  enabled: true
+  pickup_distance:
+    start: 10.0
+    end: 0.0
+    schedule: "cosine"
+  curriculum_end_fraction: 0.8
+
+reward:
+  driving_cost_per_km: 0.30
+  electricity_cost_per_kwh: 0.18
+  wait_penalty_per_step: 0.05
+  drop_penalty_per_order: 1.0
+  scale_factor: 10.0
+  max_wait_steps: 6
+  serve_bonus: 1.0
+  # Demand-aware reposition rewards
+  enable_demand_reposition_bonus: true
+  reposition_success_bonus: 1  # Bonus per unit demand at target hex
+
+physics:
+  energy_per_km: 0.2
+  avg_speed_kmh: 30.0
+  max_soc: 100.0
+  min_soc_reserve: 10.0
+  charge_power_kw: 50.0
+
+vehicle:
+  initial_soc: 80.0
+  soc_low_threshold: 20.0
+  soc_med_threshold: 50.0
+  soc_charge_interrupt_threshold: 60.0
+
+station:
+  max_power: 50.0
+  electricity_price: 0.15
+  num_ports: 1
+
+distributed:
+  enabled: false
+  backend: "nccl"
+  gpus: "auto"
+
+checkpoint:
+  save_dir: "checkpoints"
+  save_every_episodes: 20
+  save_every_steps: 5000
+  keep_last_n: 5
+  resume_from: null
+
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  tensorboard: true
+  wandb: false
+  log_every_steps: 100
+
+debug:
+  profile_gpu: false
+  log_memory: false
+  benchmark_cudnn: true
+  deterministic: false
+  seed: 42
+
+network:
+  hex_embedding_dim: 64
+  context_dim: 128
+  hidden_dim: 256
+  option_dim: 64
+  gcn_hidden_dim: 128
+  gcn_layers: 2
+  dropout: 0.1

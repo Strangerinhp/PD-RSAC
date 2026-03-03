@@ -1,0 +1,6 @@
+total_trips: 1373277
+date_range: 2009-01-01 00:00:23 to 2009-01-31 23:59:58
+unique_hexagons: 8462
+avg_distance_km: 4.144392751517834
+avg_duration_min: 11.080245548907227
+avg_fare: 9.42725817879423

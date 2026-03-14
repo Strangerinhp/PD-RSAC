@@ -1,0 +1,365 @@
+{
+  "total_trips_loaded": 2593736,
+  "total_trips_served": 15415,
+  "total_trips_dropped": 2578321,
+  "service_rate": 0.005943164608888492,
+  "total_revenue": 403126.54000351095,
+  "total_driving_cost": 79358.91694249763,
+  "total_charging_cost": 2930.9999999999995,
+  "net_profit": 320836.6230610133,
+  "final_avg_soc": 43.377384185791016,
+  "action_counts": {
+    "SERVE": 23079,
+    "CHARGE": 977,
+    "IDLE": 8799593,
+    "BUSY": 104351
+  },
+  "simulation_time_seconds": 1220.4247102737427,
+  "steps_completed": 8928,
+  "hourly_metrics": {
+    "0": {
+      "revenue": 24282.539723589885,
+      "driving_cost": 4956.418906026986,
+      "energy_cost": 149.99999999999997,
+      "net_profit": 19176.1208175629
+    },
+    "1": {
+      "revenue": 22008.50474330321,
+      "driving_cost": 4595.293754625322,
+      "energy_cost": 144.0,
+      "net_profit": 17269.210988677885
+    },
+    "2": {
+      "revenue": 21425.458919553635,
+      "driving_cost": 4409.509197632885,
+      "energy_cost": 96.0,
+      "net_profit": 16919.94972192075
+    },
+    "3": {
+      "revenue": 17482.076377375102,
+      "driving_cost": 3701.0299425691783,
+      "energy_cost": 102.0,
+      "net_profit": 13679.046434805925
+    },
+    "4": {
+      "revenue": 15441.372005955942,
+      "driving_cost": 3232.7333508555203,
+      "energy_cost": 134.9999999999999,
+      "net_profit": 12073.638655100422
+    },
+    "5": {
+      "revenue": 13220.718234773725,
+      "driving_cost": 2779.014807969288,
+      "energy_cost": 99.0,
+      "net_profit": 10342.703426804437
+    },
+    "6": {
+      "revenue": 13338.776732714461,
+      "driving_cost": 2726.44396199362,
+      "energy_cost": 87.0,
+      "net_profit": 10525.332770720841
+    },
+    "7": {
+      "revenue": 13411.79514351987,
+      "driving_cost": 2641.707270051884,
+      "energy_cost": 123.0,
+      "net_profit": 10647.087873467986
+    },
+    "8": {
+      "revenue": 13793.177184373344,
+      "driving_cost": 2700.1901862490613,
+      "energy_cost": 111.0,
+      "net_profit": 10981.986998124283
+    },
+    "9": {
+      "revenue": 14398.098771939054,
+      "driving_cost": 2877.09357035456,
+      "energy_cost": 99.0,
+      "net_profit": 11422.005201584494
+    },
+    "10": {
+      "revenue": 15671.386576175748,
+      "driving_cost": 3181.6116948903273,
+      "energy_cost": 110.99999999999994,
+      "net_profit": 12378.77488128542
+    },
+    "11": {
+      "revenue": 18696.062821961707,
+      "driving_cost": 3699.0596067834394,
+      "energy_cost": 126.0,
+      "net_profit": 14871.003215178267
+    },
+    "12": {
+      "revenue": 20280.354191354083,
+      "driving_cost": 3953.8818613450785,
+      "energy_cost": 146.99999999999977,
+      "net_profit": 16179.472330009005
+    },
+    "13": {
+      "revenue": 18270.889316959452,
+      "driving_cost": 3432.5889355335876,
+      "energy_cost": 156.0,
+      "net_profit": 14682.300381425865
+    },
+    "14": {
+      "revenue": 19154.06981072249,
+      "driving_cost": 3559.4183953743413,
+      "energy_cost": 162.0,
+      "net_profit": 15432.651415348148
+    },
+    "15": {
+      "revenue": 16987.17983113046,
+      "driving_cost": 3109.3349865508026,
+      "energy_cost": 138.0,
+      "net_profit": 13739.844844579657
+    },
+    "16": {
+      "revenue": 15879.605196026198,
+      "driving_cost": 2982.456807068691,
+      "energy_cost": 96.0,
+      "net_profit": 12801.148388957507
+    },
+    "17": {
+      "revenue": 14979.618126867223,
+      "driving_cost": 2774.848826743695,
+      "energy_cost": 126.0,
+      "net_profit": 12078.769300123528
+    },
+    "18": {
+      "revenue": 16054.348237605198,
+      "driving_cost": 2945.9313702944273,
+      "energy_cost": 135.0,
+      "net_profit": 12973.41686731077
+    },
+    "19": {
+      "revenue": 17075.338305440266,
+      "driving_cost": 3124.5974483840546,
+      "energy_cost": 101.99999999999999,
+      "net_profit": 13848.740857056211
+    },
+    "20": {
+      "revenue": 16592.70122965952,
+      "driving_cost": 3187.4897989309793,
+      "energy_cost": 78.0,
+      "net_profit": 13327.211430728541
+    },
+    "21": {
+      "revenue": 15730.238427765129,
+      "driving_cost": 3062.1797253124314,
+      "energy_cost": 144.0,
+      "net_profit": 12524.058702452698
+    },
+    "22": {
+      "revenue": 15712.037186415633,
+      "driving_cost": 3091.0235461972734,
+      "energy_cost": 141.0,
+      "net_profit": 12480.01364021836
+    },
+    "23": {
+      "revenue": 13240.192908329613,
+      "driving_cost": 2635.0589907601934,
+      "energy_cost": 123.0,
+      "net_profit": 10482.13391756942
+    }
+  },
+  "daily_metrics": {
+    "0": {
+      "revenue": 122593.2286529557,
+      "driving_cost": 25939.761541273445,
+      "energy_cost": 248.99999999999997,
+      "net_profit": 96404.46711168226
+    },
+    "1": {
+      "revenue": 52972.28263622336,
+      "driving_cost": 10825.644850249235,
+      "energy_cost": 516.0,
+      "net_profit": 41630.637785974126
+    },
+    "2": {
+      "revenue": 28355.711520795012,
+      "driving_cost": 5662.570495375272,
+      "energy_cost": 231.0,
+      "net_profit": 22462.14102541974
+    },
+    "3": {
+      "revenue": 20404.03720692263,
+      "driving_cost": 3960.5231898139755,
+      "energy_cost": 104.99999999999989,
+      "net_profit": 16338.514017108653
+    },
+    "4": {
+      "revenue": 15592.487291974598,
+      "driving_cost": 2989.2725752226906,
+      "energy_cost": 147.0,
+      "net_profit": 12456.214716751907
+    },
+    "5": {
+      "revenue": 13488.204172976868,
+      "driving_cost": 2530.048544140518,
+      "energy_cost": 84.0,
+      "net_profit": 10874.15562883635
+    },
+    "6": {
+      "revenue": 14342.592713818216,
+      "driving_cost": 2748.4773339058956,
+      "energy_cost": 165.0,
+      "net_profit": 11429.11537991232
+    },
+    "7": {
+      "revenue": 17032.581488216063,
+      "driving_cost": 3238.2376485015047,
+      "energy_cost": 183.0,
+      "net_profit": 13611.343839714558
+    },
+    "8": {
+      "revenue": 12659.656787037908,
+      "driving_cost": 2215.776841839761,
+      "energy_cost": 111.0,
+      "net_profit": 10332.879945198147
+    },
+    "9": {
+      "revenue": 14616.717696485866,
+      "driving_cost": 2771.5190544896323,
+      "energy_cost": 186.0,
+      "net_profit": 11659.198641996234
+    },
+    "10": {
+      "revenue": 11041.097362904111,
+      "driving_cost": 2059.1887422033105,
+      "energy_cost": 134.99999999999977,
+      "net_profit": 8846.9086207008
+    },
+    "11": {
+      "revenue": 9283.662017507711,
+      "driving_cost": 1757.3998119826792,
+      "energy_cost": 129.0,
+      "net_profit": 7397.262205525032
+    },
+    "12": {
+      "revenue": 8731.541636257025,
+      "driving_cost": 1635.4863283641462,
+      "energy_cost": 81.0,
+      "net_profit": 7015.055307892879
+    },
+    "13": {
+      "revenue": 6832.969805481727,
+      "driving_cost": 1257.7517330412084,
+      "energy_cost": 69.0,
+      "net_profit": 5506.218072440519
+    },
+    "14": {
+      "revenue": 5538.83463384182,
+      "driving_cost": 877.2112090208975,
+      "energy_cost": 42.0,
+      "net_profit": 4619.623424820922
+    },
+    "15": {
+      "revenue": 2739.043662081531,
+      "driving_cost": 435.4695319265011,
+      "energy_cost": 24.0,
+      "net_profit": 2279.5741301550297
+    },
+    "16": {
+      "revenue": 3515.654131137184,
+      "driving_cost": 660.3823545656487,
+      "energy_cost": 36.0,
+      "net_profit": 2819.271776571535
+    },
+    "17": {
+      "revenue": 3774.6224167686305,
+      "driving_cost": 704.0631450354995,
+      "energy_cost": 36.0,
+      "net_profit": 3034.559271733131
+    },
+    "18": {
+      "revenue": 2968.9876490097377,
+      "driving_cost": 565.1029443908483,
+      "energy_cost": 27.0,
+      "net_profit": 2376.8847046188894
+    },
+    "19": {
+      "revenue": 3958.7598516746657,
+      "driving_cost": 738.6679253597395,
+      "energy_cost": 57.0,
+      "net_profit": 3163.0919263149262
+    },
+    "20": {
+      "revenue": 2365.627893435885,
+      "driving_cost": 418.1008876372216,
+      "energy_cost": 15.0,
+      "net_profit": 1932.5270057986636
+    },
+    "21": {
+      "revenue": 3860.7523847652483,
+      "driving_cost": 691.4802661902795,
+      "energy_cost": 36.0,
+      "net_profit": 3133.2721185749688
+    },
+    "22": {
+      "revenue": 2913.4292012382066,
+      "driving_cost": 538.0899737879372,
+      "energy_cost": 15.0,
+      "net_profit": 2360.3392274502694
+    },
+    "23": {
+      "revenue": 5353.693886891706,
+      "driving_cost": 933.3843339175364,
+      "energy_cost": 54.0,
+      "net_profit": 4366.3095529741695
+    },
+    "24": {
+      "revenue": 4878.490409636113,
+      "driving_cost": 905.0798195622629,
+      "energy_cost": 81.0,
+      "net_profit": 3892.4105900738505
+    },
+    "25": {
+      "revenue": 3122.403509556316,
+      "driving_cost": 539.13749109731,
+      "energy_cost": 33.0,
+      "net_profit": 2550.266018459006
+    },
+    "26": {
+      "revenue": 3536.7433144374518,
+      "driving_cost": 598.8056724898488,
+      "energy_cost": 24.0,
+      "net_profit": 2913.937641947603
+    },
+    "27": {
+      "revenue": 2150.461968817108,
+      "driving_cost": 338.6502769411163,
+      "energy_cost": 18.0,
+      "net_profit": 1793.8116918759915
+    },
+    "28": {
+      "revenue": 1756.5067889373167,
+      "driving_cost": 308.27674097567797,
+      "energy_cost": 12.0,
+      "net_profit": 1436.2300479616388
+    },
+    "29": {
+      "revenue": 2725.7632658935618,
+      "driving_cost": 510.30605794778967,
+      "energy_cost": 27.0,
+      "net_profit": 2188.457207945772
+    },
+    "30": {
+      "revenue": 19.99404583167052,
+      "driving_cost": 5.0496212482394185,
+      "energy_cost": 3.0,
+      "net_profit": 11.9444245834311
+    }
+  },
+  "config": {
+    "num_vehicles": 1000,
+    "num_hexes": 10453,
+    "episode_duration_hours": 744.0,
+    "steps_per_episode": 8928,
+    "trip_sample_ratio": 0.2,
+    "critical_soc_threshold": 20.0,
+    "max_pickup_distance": 5.0,
+    "min_profit_threshold": 0.0,
+    "driving_cost_tracked": true
+  },
+  "date": "2009-01-01"
+}

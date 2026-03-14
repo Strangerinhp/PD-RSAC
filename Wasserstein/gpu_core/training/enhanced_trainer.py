@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import autocast, GradScaler
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from dataclasses import dataclass, field
 import time
 
@@ -123,7 +123,8 @@ class EnhancedSACTrainer(SACTrainer):
         
         super().__init__(
             agent, replay_buffer, training_config,
-            checkpoint_config, logging_config, device
+            checkpoint_config, logging_config, device,
+            use_amp=self.use_amp
         )
         
         self.enhanced_config = enhanced_config or EnhancedTrainingConfig()
@@ -362,13 +363,24 @@ class EnhancedSACTrainer(SACTrainer):
                 durations = batch.durations
             else:
                 durations = torch.ones_like(rewards)
+
+        use_prioritized = getattr(self.config, 'use_prioritized_replay', False) or \
+                          getattr(self.replay_buffer, 'prioritized', False)
+        should_update_priorities = use_prioritized and batch.indices is not None
         
         # ===== Critic Update with Semi-MDP (Mixed Precision) =====
         with autocast(enabled=self.use_amp):
-            critic_loss = self._compute_critic_loss_enhanced(
+            critic_result = self._compute_critic_loss_enhanced(
                 states_flat, actions, rewards_normalized, 
-                next_states_flat, dones, durations
+                next_states_flat, dones, durations,
+                return_td_error=should_update_priorities,
             )
+
+        if should_update_priorities:
+            critic_loss, td_error = critic_result
+        else:
+            critic_loss = critic_result
+            td_error = None
         
         self.agent.critic_optimizer.zero_grad()
         self.scaler.scale(critic_loss).backward()
@@ -418,6 +430,9 @@ class EnhancedSACTrainer(SACTrainer):
         
         self.agent.soft_update_target()
         self.global_step += 1
+
+        if should_update_priorities and td_error is not None:
+            self.replay_buffer.update_priorities(batch.indices, td_error)
         
         # Compute metrics
         with torch.no_grad():
@@ -459,8 +474,9 @@ class EnhancedSACTrainer(SACTrainer):
         rewards: torch.Tensor,
         next_states: torch.Tensor,
         dones: torch.Tensor,
-        durations: torch.Tensor
-    ) -> torch.Tensor:
+        durations: torch.Tensor,
+        return_td_error: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Compute critic loss with Semi-MDP discounting.
         
@@ -566,6 +582,9 @@ class EnhancedSACTrainer(SACTrainer):
         q1, q2 = self._call_critic(self.agent.critic, states, per_vehicle_actions)
         critic_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
 
+        if return_td_error:
+            td_error = (torch.min(q1, q2) - target_q).abs().detach()
+            return critic_loss, td_error
         return critic_loss
     
     def _update_value_network(

@@ -413,7 +413,8 @@ def create_trainer(
             training_config=training_config,
             checkpoint_config=config.checkpoint,
             logging_config=config.logging,
-            device=str(device)
+            device=str(device),
+            use_amp=config.training.mixed_precision,
         )
 
 
@@ -683,6 +684,8 @@ def train_single_gpu(args):
         print(f"[Optimization] Mixed Precision Training (AMP): Enabled")
     else:
         trainer = create_trainer(agent, replay_buffer, config, device)
+        if config.training.mixed_precision:
+            print(f"[Optimization] Mixed Precision Training (AMP): Enabled")
     
     # Create collector - use EnhancedEpisodeCollector for duration tracking if Semi-MDP enabled
     if args.semi_mdp:

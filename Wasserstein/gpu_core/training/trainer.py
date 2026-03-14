@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from typing import Optional, Dict, Any, Callable, Tuple
 from dataclasses import dataclass, field
@@ -35,7 +36,8 @@ class SACTrainer:
         training_config: TrainingConfig,
         checkpoint_config: Optional[CheckpointConfig] = None,
         logging_config: Optional[LoggingConfig] = None,
-        device: str = 'cuda'
+        device: str = 'cuda',
+        use_amp: bool = False,
     ):
         self.agent = agent
         self.replay_buffer = replay_buffer
@@ -43,6 +45,8 @@ class SACTrainer:
         self.checkpoint_config = checkpoint_config or CheckpointConfig()
         self.logging_config = logging_config or LoggingConfig()
         self.device = torch.device(device)
+        self.use_amp = use_amp
+        self.scaler = GradScaler(enabled=self.use_amp)
         
         self.global_step = 0
         self.episode = 0
@@ -88,76 +92,93 @@ class SACTrainer:
         next_states = batch.next_states
         dones = batch.dones
         
-        metrics = self.agent.update(
-            states=states,
-            actions=actions,
-            rewards=rewards,
-            next_states=next_states,
-            dones=dones,
-            # Assignment info for auxiliary loss
-            serve_vehicle_idx=batch.serve_vehicle_idx,
-            serve_trip_idx=batch.serve_trip_idx,
-            num_served=batch.num_served,
-            charge_vehicle_idx=batch.charge_vehicle_idx,
-            charge_station_idx=batch.charge_station_idx,
-            num_charged=batch.num_charged,
-        )
-        
-        self.global_step += 1
-        
         # Check if prioritized replay is enabled
         use_prioritized = getattr(self.config, 'use_prioritized_replay', False) or \
                           getattr(self.replay_buffer, 'prioritized', False)
+        should_update_priorities = use_prioritized and batch.indices is not None
+
+        states_flat = self.agent._flatten_states(states)
+        next_states_flat = self.agent._flatten_states(next_states)
+        rewards_normalized = self.agent._normalize_rewards(rewards)
+
+        # Critic update (+ optional td_error extraction for PER)
+        with autocast(enabled=self.use_amp):
+            critic_result = self.agent.compute_critic_loss(
+                states=states_flat,
+                actions=actions,
+                rewards=rewards_normalized,
+                next_states=next_states_flat,
+                dones=dones,
+                serve_vehicle_idx=batch.serve_vehicle_idx,
+                serve_trip_idx=batch.serve_trip_idx,
+                num_served=batch.num_served,
+                charge_vehicle_idx=batch.charge_vehicle_idx,
+                charge_station_idx=batch.charge_station_idx,
+                num_charged=batch.num_charged,
+                return_td_error=should_update_priorities,
+            )
+
+        if should_update_priorities:
+            critic_loss, td_error = critic_result
+        else:
+            critic_loss = critic_result
+            td_error = None
+
+        self.agent.critic_optimizer.zero_grad()
+        self.scaler.scale(critic_loss).backward()
+        self.scaler.unscale_(self.agent.critic_optimizer)
+        torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=1.0)
+        self.scaler.step(self.agent.critic_optimizer)
+        self.scaler.update()
+
+        # Actor update
+        with autocast(enabled=self.use_amp):
+            actor_loss, log_prob, aux_losses = self.agent.compute_actor_loss(
+                states=states_flat,
+                serve_vehicle_idx=batch.serve_vehicle_idx,
+                serve_trip_idx=batch.serve_trip_idx,
+                num_served=batch.num_served,
+                charge_vehicle_idx=batch.charge_vehicle_idx,
+                charge_station_idx=batch.charge_station_idx,
+                num_charged=batch.num_charged,
+            )
+
+        self.agent.actor_optimizer.zero_grad()
+        self.scaler.scale(actor_loss).backward()
+        self.scaler.unscale_(self.agent.actor_optimizer)
+        torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=1.0)
+        self.scaler.step(self.agent.actor_optimizer)
+        self.scaler.update()
+
+        # Alpha update
+        alpha_loss = torch.tensor(0.0, device=self.device)
+        if self.agent.auto_alpha:
+            with autocast(enabled=self.use_amp):
+                alpha_loss = self.agent.compute_alpha_loss(log_prob)
+            self.agent.alpha_optimizer.zero_grad()
+            self.scaler.scale(alpha_loss).backward()
+            self.scaler.step(self.agent.alpha_optimizer)
+            self.scaler.update()
+
+        self.agent.soft_update_target()
+        self.global_step += 1
         
-        if use_prioritized and batch.indices is not None:
-            with torch.no_grad():
-                # Flatten states if dict
-                if isinstance(states, dict):
-                    batch_size = states['vehicle'].shape[0]
-                    states_flat = torch.cat([
-                        states['vehicle'].view(batch_size, -1),
-                        states['hex'].view(batch_size, -1),
-                        states['context']
-                    ], dim=-1)
-                else:
-                    states_flat = states
-                
-                if isinstance(next_states, dict):
-                    next_states_flat = torch.cat([
-                        next_states['vehicle'].view(batch_size, -1),
-                        next_states['hex'].view(batch_size, -1),
-                        next_states['context']
-                    ], dim=-1)
-                else:
-                    next_states_flat = next_states
-                    
-                # Extract per-vehicle action types
-                if actions.dim() == 3:
-                    per_vehicle_actions = actions[:, :, 0].long()
-                else:
-                    per_vehicle_actions = actions.long()
-
-                q1, q2 = self.agent.call_critic(self.agent.critic, states_flat, per_vehicle_actions)
-
-                # Get next actions from actor
-                actor_output = self.agent.forward(next_states_flat, deterministic=False)
-                if hasattr(actor_output, 'action_type'):
-                    next_action = actor_output.action_type
-                    next_log_prob = actor_output.action_log_prob
-                else:
-                    next_action, next_log_prob, _, _ = actor_output
-                if next_log_prob.dim() == 2:
-                    next_log_prob = next_log_prob.mean(dim=1)
-
-                next_q1, next_q2 = self.agent.call_critic(self.agent.critic_target, next_states_flat, next_action)
-                next_q = torch.min(next_q1, next_q2) - self.agent.alpha * next_log_prob
-                target_q = rewards + (1 - dones.float()) * self.config.gamma * next_q
-                td_error = (torch.min(q1, q2) - target_q).abs()
-            
+        if should_update_priorities and td_error is not None:
             self.replay_buffer.update_priorities(
                 batch.indices,
                 td_error  # Keep as tensor, not numpy
             )
+
+        metrics = {
+            'critic_loss': critic_loss.item(),
+            'actor_loss': actor_loss.item(),
+            'alpha_loss': alpha_loss.item() if isinstance(alpha_loss, torch.Tensor) else alpha_loss,
+            'alpha': self.agent.alpha.item(),
+            'log_prob': log_prob.mean().item(),
+            'q_mean': aux_losses.get('q_mean', 0.0),
+            'q_std': aux_losses.get('q_std', 0.0),
+            'repos_aux_loss': aux_losses.get('repos_aux_loss', 0.0),
+        }
         
         # Step learning rate schedulers
         if hasattr(self, 'actor_scheduler'):

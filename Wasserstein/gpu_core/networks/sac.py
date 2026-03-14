@@ -441,7 +441,8 @@ class SACAgent(nn.Module):
         charge_vehicle_idx: Optional[torch.Tensor] = None,
         charge_station_idx: Optional[torch.Tensor] = None,
         num_charged: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_td_error: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         # Extract action types for critic - actions shape: [batch, num_vehicles, 2]
         # Use aggregated action (mean action type per batch)
         if actions.dim() == 3:
@@ -587,6 +588,9 @@ class SACAgent(nn.Module):
             q1, q2 = self.critic(states, action_type_agg, **assignment_kwargs)
             critic_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
         
+        if return_td_error:
+            td_error = (torch.min(q1, q2) - target_q).abs().detach()
+            return critic_loss, td_error
         return critic_loss
     
     def compute_actor_loss(

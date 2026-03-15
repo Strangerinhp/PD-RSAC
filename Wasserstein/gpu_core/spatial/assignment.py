@@ -821,7 +821,7 @@ class StationAssigner:
             AssignmentResult with matched vehicle-station pairs
         """
         num_vehicles = len(vehicle_indices)
-        
+
         if num_vehicles == 0 or self.num_stations == 0:
             return AssignmentResult(
                 vehicle_indices=torch.tensor([], dtype=torch.long, device=self.device),
@@ -830,14 +830,8 @@ class StationAssigner:
                 unmatched_vehicles=vehicle_indices,
                 unmatched_targets=torch.arange(self.num_stations, device=self.device)
             )
-        
-        # Expand stations by available ports - vectorized version
-        # If station 0 has 3 ports, create slots [0, 0, 0]
-        # Clip available ports to num_vehicles (don't need more slots than vehicles)
-        clipped_ports = torch.minimum(available_ports, torch.tensor(num_vehicles, device=self.device))
-        total_slots = clipped_ports.sum().item()
-        
-        if total_slots == 0:
+
+        if available_ports.sum() == 0:
             return AssignmentResult(
                 vehicle_indices=torch.tensor([], dtype=torch.long, device=self.device),
                 target_indices=torch.tensor([], dtype=torch.long, device=self.device),
@@ -845,51 +839,71 @@ class StationAssigner:
                 unmatched_vehicles=vehicle_indices,
                 unmatched_targets=torch.arange(self.num_stations, device=self.device)
             )
-        
-        # Vectorized slot expansion using repeat_interleave
-        station_slots = torch.repeat_interleave(
-            torch.arange(self.num_stations, device=self.device),
-            clipped_ports.long()
-        )
-        num_slots = len(station_slots)
-        
-        # Ensure long type for indexing
+
+        # --- Capacity-constrained greedy assignment ---
+        # Each station accepts up to available_ports[s] vehicles (not one-to-one).
+        # Build [V, S] cost matrix then sort all (vehicle, station) pairs by cost and
+        # greedily assign, decrementing station capacity on each match.
+        # This replaces slot-expansion + one-to-one solver, which caused all vehicles
+        # to collide on slot_0 of their nearest station (identical cost ties), producing
+        # spurious charge failures even when many ports were free.
+
         vehicle_positions = vehicle_positions.long()
-        
-        # Compute distance-based costs [num_vehicles, num_slots]
-        slot_hexes = self.station_hexes[station_slots]
+
+        # [V, S] distance costs
         distances = self.distance_matrix[
-            vehicle_positions.unsqueeze(1),
-            slot_hexes.unsqueeze(0)
-        ]
-        
-        # Normalize
+            vehicle_positions.unsqueeze(1),   # [V, 1]
+            self.station_hexes.unsqueeze(0)   # [1, S]
+        ]  # [V, S]
         max_dist = distances.max() + 1e-6
         distance_costs = distances / max_dist
-        
-        # Combine with preferences if provided
+
+        # Combine with actor preferences if provided
         if vehicle_preferences is not None and vehicle_preferences.shape[1] >= self.num_stations:
-            # Map preferences to slots
-            slot_prefs = vehicle_preferences[:num_vehicles, station_slots]
-            pref_costs = 1.0 - F.softmax(slot_prefs, dim=-1)
-            
+            pref_costs = 1.0 - F.softmax(vehicle_preferences[:num_vehicles], dim=-1)  # [V, S]
             costs = (1 - preference_weight) * distance_costs + preference_weight * pref_costs
         else:
-            costs = distance_costs
-        
-        # Solve assignment
-        result = self.solver.solve(costs, maximize=False)
-        
-        # Map slots back to stations
-        if len(result.target_indices) > 0:
-            matched_stations = station_slots[result.target_indices]
-        else:
-            matched_stations = torch.tensor([], dtype=torch.long, device=self.device)
-        
+            costs = distance_costs  # [V, S]
+
+        # Mask fully-occupied stations
+        unavailable = available_ports <= 0  # [S]
+        if unavailable.any():
+            costs = costs.clone()
+            costs[:, unavailable] = float('inf')
+
+        # Greedy capacity-constrained assignment:
+        # sort all (V, S) pairs by cost, assign if vehicle unmatched and station has capacity.
+        remaining_cap = available_ports.clone().long()          # [S]
+        vehicle_matched = torch.zeros(num_vehicles, dtype=torch.bool, device=self.device)
+        vehicle_station = torch.full((num_vehicles,), -1, dtype=torch.long, device=self.device)
+
+        S = self.num_stations
+        flat_costs = costs.reshape(-1)                          # [V*S]
+        sorted_flat = flat_costs.argsort().tolist()
+
+        for flat_idx in sorted_flat:
+            if flat_costs[flat_idx] >= float('inf'):
+                break  # all remaining pairs are unavailable
+            v = flat_idx // S
+            s = flat_idx % S
+            if vehicle_matched[v]:
+                continue
+            if remaining_cap[s] <= 0:
+                continue
+            vehicle_matched[v] = True
+            vehicle_station[v] = s
+            remaining_cap[s] -= 1
+            if vehicle_matched.all():
+                break
+
+        matched_local = vehicle_matched.nonzero(as_tuple=True)[0]
+        unmatched_local = (~vehicle_matched).nonzero(as_tuple=True)[0]
+
         return AssignmentResult(
-            vehicle_indices=vehicle_indices[result.vehicle_indices],
-            target_indices=matched_stations,
-            costs=result.costs,
-            unmatched_vehicles=vehicle_indices[result.unmatched_vehicles] if len(result.unmatched_vehicles) > 0 else torch.tensor([], dtype=torch.long, device=self.device),
-            unmatched_targets=torch.arange(self.num_stations, device=self.device)  # All stations remain available for future
+            vehicle_indices=vehicle_indices[matched_local],
+            target_indices=vehicle_station[matched_local],
+            costs=costs[matched_local, vehicle_station[matched_local]],
+            unmatched_vehicles=vehicle_indices[unmatched_local] if len(unmatched_local) > 0
+                               else torch.tensor([], dtype=torch.long, device=self.device),
+            unmatched_targets=torch.arange(self.num_stations, device=self.device)
         )

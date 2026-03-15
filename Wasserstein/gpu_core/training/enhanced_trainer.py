@@ -414,9 +414,19 @@ class EnhancedSACTrainer(SACTrainer):
         self.scaler.step(self.agent.actor_optimizer)
         self.scaler.update()
         
-        # ===== Alpha Update (Mixed Precision) =====
+        # ===== Alpha Update =====
+        # Temperature annealing takes priority over auto-alpha when both are enabled.
+        # The paper schedules alpha from initial_temperature → final_temperature over
+        # temperature_decay_episodes. Auto-alpha fights this by raising alpha whenever
+        # the policy gets more deterministic, preventing the intended decay.
         alpha_loss = torch.tensor(0.0)
-        if self.agent.auto_alpha:
+        if self.enhanced_config.use_temperature_annealing:
+            # Apply annealed temperature directly — overrides auto-alpha
+            annealed = self.get_temperature()
+            with torch.no_grad():
+                import math
+                self.agent.log_alpha.fill_(math.log(max(annealed, 1e-8)))
+        elif self.agent.auto_alpha:
             with autocast(enabled=self.use_amp):
                 alpha_loss = self.agent.compute_alpha_loss(log_prob)
             self.agent.alpha_optimizer.zero_grad()

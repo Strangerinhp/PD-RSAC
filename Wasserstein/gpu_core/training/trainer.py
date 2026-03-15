@@ -354,9 +354,14 @@ class SACTrainer:
     def save_checkpoint(self, filename: str):
         path = Path(self.checkpoint_config.checkpoint_dir) / filename
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         checkpoint = {
             'agent': self.agent.state_dict(),
+            'actor_optimizer': self.agent.actor_optimizer.state_dict(),
+            'critic_optimizer': self.agent.critic_optimizer.state_dict(),
+            'actor_scheduler': self.actor_scheduler.state_dict() if hasattr(self, 'actor_scheduler') else None,
+            'critic_scheduler': self.critic_scheduler.state_dict() if hasattr(self, 'critic_scheduler') else None,
+            'scaler': self.scaler.state_dict() if hasattr(self, 'scaler') else None,
             'global_step': self.global_step,
             'episode': self.episode,
             'best_reward': self.best_reward,
@@ -365,17 +370,33 @@ class SACTrainer:
                 'checkpoint': self.checkpoint_config.__dict__
             }
         }
-        
+        if self.agent.auto_alpha:
+            checkpoint['alpha_optimizer'] = self.agent.alpha_optimizer.state_dict()
+
         torch.save(checkpoint, path)
-    
+
     def load_checkpoint(self, filename: str):
         path = Path(self.checkpoint_config.checkpoint_dir) / filename
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        
+
         self.agent.load_state_dict(checkpoint['agent'])
         self.global_step = checkpoint['global_step']
         self.episode = checkpoint['episode']
         self.best_reward = checkpoint.get('best_reward', float('-inf'))
+
+        # Optimizer states — guarded for backward compat with old checkpoints
+        if 'actor_optimizer' in checkpoint:
+            self.agent.actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
+        if 'critic_optimizer' in checkpoint:
+            self.agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        if 'alpha_optimizer' in checkpoint and self.agent.auto_alpha:
+            self.agent.alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer'])
+        if checkpoint.get('actor_scheduler') is not None and hasattr(self, 'actor_scheduler'):
+            self.actor_scheduler.load_state_dict(checkpoint['actor_scheduler'])
+        if checkpoint.get('critic_scheduler') is not None and hasattr(self, 'critic_scheduler'):
+            self.critic_scheduler.load_state_dict(checkpoint['critic_scheduler'])
+        if checkpoint.get('scaler') is not None and hasattr(self, 'scaler'):
+            self.scaler.load_state_dict(checkpoint['scaler'])
 
 
 class BatchedSACTrainer(SACTrainer):

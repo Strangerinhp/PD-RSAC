@@ -229,7 +229,7 @@ class EnhancedSACTrainer(SACTrainer):
         # Extract dimensions
         hex_start = vehicle_dim
         hex_end = hex_start + num_hexes * hex_feature_dim
-        context_dim = 9
+        context_dim = self.agent.context_dim
         
         # CRITICAL FIX: Clone sliced tensors to create new tensors (not views)
         # PyTorch cat() doesn't preserve requires_grad from xi_scenario when 
@@ -464,7 +464,16 @@ class EnhancedSACTrainer(SACTrainer):
         if self.wdro is not None:
             metrics['wdro_lambda'] = self.wdro.lambda_.item()
             metrics['wdro_rho_hat'] = self.wdro.running_rho_hat
-        
+
+        # Step learning rate schedulers (same as SACTrainer.train_step)
+        if hasattr(self, 'actor_scheduler'):
+            self.actor_scheduler.step()
+        if hasattr(self, 'critic_scheduler'):
+            self.critic_scheduler.step()
+
+        metrics['lr_actor'] = self.agent.actor_optimizer.param_groups[0]['lr']
+        metrics['lr_critic'] = self.agent.critic_optimizer.param_groups[0]['lr']
+
         return metrics
     
     def _compute_critic_loss_enhanced(
@@ -494,28 +503,47 @@ class EnhancedSACTrainer(SACTrainer):
         # Keep policy/critic target under no_grad, then exit for WDRO autograd
         with torch.no_grad():
             actor_output = self.agent.forward(next_states, deterministic=False)
-        
-        # Handle both SACOutput and legacy tuple format
-        if hasattr(actor_output, 'action_type'):
-            next_action = actor_output.action_type
-            next_action_log_prob = actor_output.action_log_prob
-            next_reposition_log_prob = actor_output.reposition_log_prob
-        else:
-            next_action, next_action_log_prob, _, next_reposition_log_prob = actor_output
-        
+
+        # Full-distribution target: V(s') = Σ_a π(a|s') · [min Q(s',a) − α log π(a|s')]
+        # Matches paper Eq. 11 / Eq. 27 — exact expectation, zero variance for discrete actions.
+        # Falls back to single-sample if actor doesn't expose full distribution.
+        next_probs = getattr(actor_output, 'action_probs', None)          # [batch, V, A]
+        next_log_probs_all = getattr(actor_output, 'action_log_probs_all', None)  # [batch, V, A]
+
         with torch.no_grad():
-            next_q1, next_q2 = self._call_critic(self.agent.critic_target, next_states, next_action)
-            next_q = torch.min(next_q1, next_q2)
-        
-        # Aggregate per-vehicle log probs to fleet-level
-        # GCN outputs [B, V], need to reduce to [B]
-        if next_action_log_prob.dim() == 2:
-            next_action_log_prob = next_action_log_prob.mean(dim=1)
-        if next_reposition_log_prob.dim() == 2:
-            next_reposition_log_prob = next_reposition_log_prob.mean(dim=1)
-        
-        total_log_prob = next_action_log_prob + next_reposition_log_prob
-        next_v = next_q - self.agent.alpha * total_log_prob
+            if next_probs is not None and next_log_probs_all is not None:
+                # Enumerate all action types and compute exact expectation
+                action_dim = next_probs.shape[-1]
+                Q_next_all = []
+                for a_idx in range(action_dim):
+                    a_tensor = torch.full_like(actor_output.action_type, a_idx)
+                    nq1, nq2 = self._call_critic(self.agent.critic_target, next_states, a_tensor)
+                    Q_next_all.append(torch.min(nq1, nq2))
+                Q_next_all = torch.stack(Q_next_all, dim=-1)  # [batch, A]
+
+                mean_next_probs = next_probs.mean(dim=1)         # [batch, A]
+                mean_next_log_probs = next_log_probs_all.mean(dim=1)  # [batch, A]
+
+                next_v = (mean_next_probs * (Q_next_all - self.agent.alpha * mean_next_log_probs)).sum(dim=-1)
+            else:
+                # Fallback: single sampled action
+                if hasattr(actor_output, 'action_type'):
+                    next_action = actor_output.action_type
+                    next_action_log_prob = actor_output.action_log_prob
+                    next_reposition_log_prob = actor_output.reposition_log_prob
+                else:
+                    next_action, next_action_log_prob, _, next_reposition_log_prob = actor_output
+
+                next_q1, next_q2 = self._call_critic(self.agent.critic_target, next_states, next_action)
+                next_q = torch.min(next_q1, next_q2)
+
+                if next_action_log_prob.dim() == 2:
+                    next_action_log_prob = next_action_log_prob.mean(dim=1)
+                if next_reposition_log_prob.dim() == 2:
+                    next_reposition_log_prob = next_reposition_log_prob.mean(dim=1)
+
+                total_log_prob = next_action_log_prob + next_reposition_log_prob
+                next_v = next_q - self.agent.alpha * total_log_prob
         
         # Semi-MDP: use γ^Δ instead of fixed γ (paper Eq. 13)
         discount = torch.pow(self.agent.gamma, durations)
@@ -573,7 +601,8 @@ class EnhancedSACTrainer(SACTrainer):
                 xi_hat=xi_hat,
                 next_state_fn=next_state_fn,
                 gamma=self.agent.gamma,
-                duration_fn=duration_fn
+                duration_fn=duration_fn,
+                dones=dones,
             )
         else:
             # Standard backup target
@@ -594,27 +623,43 @@ class EnhancedSACTrainer(SACTrainer):
         dones: torch.Tensor
     ) -> torch.Tensor:
         """Update value network for WDRO adversary."""
-        # Value target from Q-network
+        # Value target: V(s) = E_a~π[min Q(s,a) - α log π(a|s)]
+        # Use full-distribution expectation (same as critic target) to avoid sampling variance.
         with torch.no_grad():
             actor_output = self.agent.forward(states, deterministic=False)
-            # Handle both SACOutput and legacy tuple format
-            if hasattr(actor_output, 'action_type'):
-                action = actor_output.action_type
-                log_prob = actor_output.action_log_prob
-                reposition_log_prob = actor_output.reposition_log_prob
-            else:
-                action, log_prob, _, reposition_log_prob = actor_output
-            
-            if log_prob.dim() == 2:
-                log_prob = log_prob.mean(dim=1)
-            if reposition_log_prob.dim() == 2:
-                reposition_log_prob = reposition_log_prob.mean(dim=1)
 
-            q1, q2 = self._call_critic(self.agent.critic, states, action)
-            min_q = torch.min(q1, q2)
-            
-            total_log_prob = log_prob + reposition_log_prob
-            v_target = min_q - self.agent.alpha * total_log_prob
+            next_probs = getattr(actor_output, 'action_probs', None)          # [batch, V, A]
+            next_log_probs_all = getattr(actor_output, 'action_log_probs_all', None)  # [batch, V, A]
+
+            if next_probs is not None and next_log_probs_all is not None:
+                # Full-distribution: Σ_a π(a) · [min Q(s,a) − α log π(a)]
+                action_dim = next_probs.shape[-1]
+                Q_all = []
+                for a_idx in range(action_dim):
+                    a_tensor = torch.full_like(actor_output.action_type, a_idx)
+                    q1, q2 = self._call_critic(self.agent.critic, states, a_tensor)
+                    Q_all.append(torch.min(q1, q2))
+                Q_all = torch.stack(Q_all, dim=-1)  # [batch, A]
+
+                mean_probs = next_probs.mean(dim=1)          # [batch, A]
+                mean_log_probs = next_log_probs_all.mean(dim=1)  # [batch, A]
+                v_target = (mean_probs * (Q_all - self.agent.alpha * mean_log_probs)).sum(dim=-1)
+            else:
+                # Fallback: single sampled action
+                if hasattr(actor_output, 'action_type'):
+                    action = actor_output.action_type
+                    log_prob = actor_output.action_log_prob
+                    reposition_log_prob = actor_output.reposition_log_prob
+                else:
+                    action, log_prob, _, reposition_log_prob = actor_output
+
+                if log_prob.dim() == 2:
+                    log_prob = log_prob.mean(dim=1)
+                if reposition_log_prob.dim() == 2:
+                    reposition_log_prob = reposition_log_prob.mean(dim=1)
+
+                q1, q2 = self._call_critic(self.agent.critic, states, action)
+                v_target = torch.min(q1, q2) - self.agent.alpha * (log_prob + reposition_log_prob)
         
         v_pred = self.value_network(states).squeeze(-1)
         value_loss = F.mse_loss(v_pred, v_target)
@@ -632,37 +677,58 @@ class EnhancedSACTrainer(SACTrainer):
         """Save checkpoint including enhanced components."""
         checkpoint = {
             'agent_state_dict': self.agent.state_dict(),
+            'actor_optimizer': self.agent.actor_optimizer.state_dict(),
+            'critic_optimizer': self.agent.critic_optimizer.state_dict(),
+            'actor_scheduler': self.actor_scheduler.state_dict() if hasattr(self, 'actor_scheduler') else None,
+            'critic_scheduler': self.critic_scheduler.state_dict() if hasattr(self, 'critic_scheduler') else None,
+            'scaler': self.scaler.state_dict() if hasattr(self, 'scaler') else None,
             'global_step': self.global_step,
             'episode': self.episode,
             'best_reward': self.best_reward,
             'current_temperature': self.current_temperature,
         }
-        
+        if self.agent.auto_alpha:
+            checkpoint['alpha_optimizer'] = self.agent.alpha_optimizer.state_dict()
+
         if self.value_network is not None:
             checkpoint['value_network_state_dict'] = self.value_network.state_dict()
             checkpoint['value_optimizer_state_dict'] = self.value_optimizer.state_dict()
-        
+
         if self.wdro is not None:
             checkpoint['wdro_state_dict'] = self.wdro.state_dict()
-        
+
         save_path = os.path.join(self.checkpoint_config.checkpoint_dir, path)
         os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else self.checkpoint_config.checkpoint_dir, exist_ok=True)
         torch.save(checkpoint, save_path)
-    
+
     def load_checkpoint(self, path: str):
         """Load checkpoint including enhanced components."""
         checkpoint = torch.load(path, map_location=self.device)
-        
+
         self.agent.load_state_dict(checkpoint['agent_state_dict'])
         self.global_step = checkpoint.get('global_step', 0)
         self.episode = checkpoint.get('episode', 0)
         self.best_reward = checkpoint.get('best_reward', float('-inf'))
         self.current_temperature = checkpoint.get('current_temperature', 1.0)
-        
+
+        # Optimizer states — guarded for backward compat with old checkpoints
+        if 'actor_optimizer' in checkpoint:
+            self.agent.actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
+        if 'critic_optimizer' in checkpoint:
+            self.agent.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        if 'alpha_optimizer' in checkpoint and self.agent.auto_alpha:
+            self.agent.alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer'])
+        if checkpoint.get('actor_scheduler') is not None and hasattr(self, 'actor_scheduler'):
+            self.actor_scheduler.load_state_dict(checkpoint['actor_scheduler'])
+        if checkpoint.get('critic_scheduler') is not None and hasattr(self, 'critic_scheduler'):
+            self.critic_scheduler.load_state_dict(checkpoint['critic_scheduler'])
+        if checkpoint.get('scaler') is not None and hasattr(self, 'scaler'):
+            self.scaler.load_state_dict(checkpoint['scaler'])
+
         if self.value_network is not None and 'value_network_state_dict' in checkpoint:
             self.value_network.load_state_dict(checkpoint['value_network_state_dict'])
             self.value_optimizer.load_state_dict(checkpoint['value_optimizer_state_dict'])
-        
+
         if self.wdro is not None and 'wdro_state_dict' in checkpoint:
             self.wdro.load_state_dict(checkpoint['wdro_state_dict'])
 

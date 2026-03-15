@@ -871,30 +871,71 @@ class StationAssigner:
             costs = costs.clone()
             costs[:, unavailable] = float('inf')
 
-        # Greedy capacity-constrained assignment:
-        # sort all (V, S) pairs by cost, assign if vehicle unmatched and station has capacity.
+        # Vectorized capacity-constrained greedy assignment — no Python loops.
+        # Same logic as before (station holds up to available_ports[s] vehicles,
+        # lowest-cost vehicle per station wins), but fully GPU-resident.
+        # Multi-round: each round assigns each unmatched vehicle to its cheapest
+        # available station; within-station conflicts resolved by keeping only
+        # the remaining_cap[s] cheapest vehicles. Typically 1-2 rounds suffice.
         remaining_cap = available_ports.clone().long()          # [S]
         vehicle_matched = torch.zeros(num_vehicles, dtype=torch.bool, device=self.device)
         vehicle_station = torch.full((num_vehicles,), -1, dtype=torch.long, device=self.device)
 
         S = self.num_stations
-        flat_costs = costs.reshape(-1)                          # [V*S]
-        sorted_flat = flat_costs.argsort().tolist()
-
-        for flat_idx in sorted_flat:
-            if flat_costs[flat_idx] >= float('inf'):
-                break  # all remaining pairs are unavailable
-            v = flat_idx // S
-            s = flat_idx % S
-            if vehicle_matched[v]:
-                continue
-            if remaining_cap[s] <= 0:
-                continue
-            vehicle_matched[v] = True
-            vehicle_station[v] = s
-            remaining_cap[s] -= 1
-            if vehicle_matched.all():
+        MAX_ROUNDS = 5
+        for _round in range(MAX_ROUNDS):
+            if vehicle_matched.all() or remaining_cap.sum() == 0:
                 break
+
+            # Build masked cost view: skip already-matched vehicles and full stations
+            round_costs = costs.clone()
+            round_costs[vehicle_matched] = float('inf')
+            round_costs[:, remaining_cap <= 0] = float('inf')
+
+            # Each vehicle picks its cheapest available station
+            best_cost, best_station = round_costs.min(dim=1)   # [V]
+            valid_v = best_cost < float('inf')
+            if not valid_v.any():
+                break
+
+            v_valid = valid_v.nonzero(as_tuple=True)[0]        # [V_valid]
+            s_valid = best_station[v_valid]                     # [V_valid]
+            c_valid = best_cost[v_valid]                        # [V_valid]
+
+            # Sort by (station, cost) to compute within-station rank
+            sort_key = s_valid.float() * (best_cost.max() + 1.0) + c_valid
+            order = sort_key.argsort(stable=True)
+            v_sorted = v_valid[order]
+            s_sorted = s_valid[order]
+
+            # within_group_rank[i] = rank of vehicle i among all vehicles targeting
+            # the same station (0 = cheapest).  Fully vectorized via cummax.
+            n = len(s_sorted)
+            positions = torch.arange(n, device=self.device)
+            station_changes = torch.cat([
+                torch.ones(1, dtype=torch.bool, device=self.device),
+                s_sorted[1:] != s_sorted[:-1]
+            ])
+            group_start = torch.where(
+                station_changes, positions,
+                torch.zeros(n, dtype=torch.long, device=self.device)
+            )
+            group_start = torch.cummax(group_start, dim=0).values
+            within_group_rank = positions - group_start         # 0, 1, 2, … within group
+
+            # Keep vehicle only if its rank is below the station's remaining capacity
+            cap_limit = remaining_cap[s_sorted]
+            keep = within_group_rank < cap_limit
+
+            assigned_v = v_sorted[keep]
+            assigned_s = s_sorted[keep]
+
+            vehicle_matched[assigned_v] = True
+            vehicle_station[assigned_v] = assigned_s
+            remaining_cap.scatter_add_(
+                0, assigned_s,
+                -torch.ones(len(assigned_s), dtype=torch.long, device=self.device)
+            )
 
         matched_local = vehicle_matched.nonzero(as_tuple=True)[0]
         unmatched_local = (~vehicle_matched).nonzero(as_tuple=True)[0]

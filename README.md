@@ -143,6 +143,6 @@ python preprocess_full_data.py --input <RAW_TAXI_PARQUET> --output-dir <PROCESSE
 ## Requirements / conditions
 
 - Install Python dependencies from `requirements.txt`
-- GPU training is the intended setup - 17GB VRAM to run all settings
+- GPU training is the intended setup - 17GB VRAM needed to run all settings
 - `--milp` requires **Gurobi** and a valid license
 - training and evaluation commands expect a processed parquet file such as `<PROCESSED_TRIPS_PARQUET>`

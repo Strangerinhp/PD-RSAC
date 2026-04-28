@@ -62,6 +62,7 @@ class MILPAssignment:
         max_pickup_distance: float = 5.0,       # Hard pickup radius (km) — must match env
         station_positions: Optional[np.ndarray] = None,  # Real station hex IDs
         nearby_stations_k: int = 5,        # Keep charging candidates local
+        fair_mode: bool = False,           # Use pass-through charge power handling
     ):
         self.num_vehicles = num_vehicles
         self.num_hexes = num_hexes
@@ -73,9 +74,10 @@ class MILPAssignment:
         self.eta_c = eta_c
         self.eta_drv = eta_drv
         self.p_max_s = p_max_s
-        self.p_min = p_min
-        self.p_max_feed = p_max_feed
-        self.charge_action_penalty = charge_action_penalty
+        self.fair_mode = fair_mode
+        self.p_min = 1.0 if fair_mode else p_min
+        self.p_max_feed = float('inf') if fair_mode else p_max_feed
+        self.charge_action_penalty = 0.0 if fair_mode else charge_action_penalty
         self.lambda_power = lambda_power
         self.port_capacity = port_capacity
         self.delta_t = delta_t
@@ -191,8 +193,11 @@ class MILPAssignment:
             full_reposition_targets[avail_idx[repos_mask]] = preferred_reposition_targets[avail_idx[repos_mask]]
 
         charge_mask = result.action_types == 1
-        if charge_mask.any() and result.vehicle_charge_power is not None:
-            full_vehicle_charge_power[avail_idx[charge_mask]] = result.vehicle_charge_power[charge_mask].to(device)
+        if charge_mask.any():
+            if self.fair_mode:
+                full_vehicle_charge_power[avail_idx[charge_mask]] = preferred_charge_power[charge_mask].to(device)
+            elif result.vehicle_charge_power is not None:
+                full_vehicle_charge_power[avail_idx[charge_mask]] = result.vehicle_charge_power[charge_mask].to(device)
 
         return AssignmentResult(
             action_types=full_action_types,
@@ -241,8 +246,8 @@ class MILPAssignment:
         repo_cands = self._get_repo_candidates(v_pos, dist_mat, t_pick if T > 0 else None)
         K = repo_cands.shape[1]
 
-        fixed_feeder_load_kw = max(0.0, float(fixed_feeder_load_kw))
-        feeder_remaining_kw = max(0.0, float(self.p_max_feed) - fixed_feeder_load_kw)
+        fixed_feeder_load_kw = 0.0 if self.fair_mode else max(0.0, float(fixed_feeder_load_kw))
+        feeder_remaining_kw = None if self.fair_mode else max(0.0, float(self.p_max_feed) - fixed_feeder_load_kw)
         _log_step = (current_step % 20 == 0)
 
         if self._first_assign_call:
@@ -251,7 +256,10 @@ class MILPAssignment:
                 print(f"[MILP]   fares:    min={t_fares.min():.2f}  max={t_fares.max():.2f}  mean={t_fares.mean():.2f}")
             print(f"[MILP]   SoC(kWh): min={v_soc_kwh.min():.1f}  max={v_soc_kwh.max():.1f}")
             print(f"[MILP]   params:   delta_t={self.delta_t:.4f}h  mu={self.mu}  p_elec={self.p_elec}  lambda_power={self.lambda_power}")
-            print(f"[MILP]   feeder:   fixed_load={fixed_feeder_load_kw:.1f}kW  remaining={feeder_remaining_kw:.1f}kW / cap={self.p_max_feed:.1f}kW")
+            if self.fair_mode:
+                print("[MILP]   feeder:   disabled in fair_mode")
+            else:
+                print(f"[MILP]   feeder:   fixed_load={fixed_feeder_load_kw:.1f}kW  remaining={feeder_remaining_kw:.1f}kW / cap={self.p_max_feed:.1f}kW")
             print(f"[MILP]   max charge cost/step = {self.p_elec * self.delta_t * self.p_max_s:.3f} $/vehicle")
             sample_net_rv = (t_fares.mean() - self.c_drv * 3.0) if T > 0 else 0.0
             print(f"[MILP]   sample serve net_rv (3km total) = {sample_net_rv:.3f} $")
@@ -364,8 +372,9 @@ class MILPAssignment:
             for s in nearby_sta[i]:
                 obj -= self.p_elec * self.delta_t * p[i, s]
                 obj -= self.charge_action_penalty * z[i, s]
-                pref_kw = float(pref_pow_kw[i])
-                obj -= self.lambda_power * (p[i, s] - pref_kw) * (p[i, s] - pref_kw)
+                if not self.fair_mode:
+                    pref_kw = float(pref_pow_kw[i])
+                    obj -= self.lambda_power * (p[i, s] - pref_kw) * (p[i, s] - pref_kw)
 
         if T > 0:
             for i in range(V):
@@ -418,10 +427,11 @@ class MILPAssignment:
                 name=f"port_cap_{s}",
             )
 
-        model.addConstr(
-            gp.quicksum(p[i, s] for i in range(V) for s in nearby_sta[i]) <= feeder_remaining_kw,
-            name="feeder_limit",
-        )
+        if not self.fair_mode:
+            model.addConstr(
+                gp.quicksum(p[i, s] for i in range(V) for s in nearby_sta[i]) <= feeder_remaining_kw,
+                name="feeder_limit",
+            )
 
         for i in range(V):
             for s in nearby_sta[i]:
@@ -469,8 +479,11 @@ class MILPAssignment:
                     if z[i, s].X > 0.5:
                         acts[i] = 1
                         chg[i] = s
-                        power_kw = float(p[i, s].X)
-                        chg_power[i] = np.float32(np.clip(power_kw / max(self.p_max_s, 1e-9), 0.0, 1.0))
+                        if self.fair_mode:
+                            chg_power[i] = pref_pow_frac[i]
+                        else:
+                            power_kw = float(p[i, s].X)
+                            chg_power[i] = np.float32(np.clip(power_kw / max(self.p_max_s, 1e-9), 0.0, 1.0))
                         assigned = True
                         break  # CHARGE=1
                 if assigned:

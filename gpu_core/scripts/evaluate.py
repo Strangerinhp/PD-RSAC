@@ -73,6 +73,10 @@ def parse_args():
                         help='Maximum number of hexes')
     parser.add_argument('--milp', action='store_true', default=False,
                         help='Enable MILP trip assignment (requires Gurobi)')
+    parser.add_argument('--fair-mode', action='store_true', default=True,
+                        help='Use fair MILP charging mode without runtime feeder cap')
+    parser.add_argument('--no-fair-mode', dest='fair_mode', action='store_false',
+                        help='Use standard MILP charging constraints with runtime feeder cap')
 
     # Eval settings
     parser.add_argument('--deterministic', action='store_true', default=True,
@@ -614,10 +618,16 @@ def evaluate(args):
                 charge_action_penalty=0.2,
                 lambda_power=0.02,
                 max_pickup_distance=getattr(env, 'max_pickup_distance', 5.0),
+                fair_mode=args.fair_mode,
             )
-            env.set_feeder_power_limit(7000.0)
-            print(f"[MILP] Assigner initialised (delta_t={step_hours:.4f}h, p_max_feed=7000.0kW, p_min=20.0kW, charge_action_penalty=0.2, lambda_power=0.02)")
-            print("[MILP] Runtime feeder cap in env: 7000.0kW")
+            if args.fair_mode:
+                env.set_feeder_power_limit(None)
+                print(f"[MILP] Assigner initialised (delta_t={step_hours:.4f}h, fair_mode=True, feeder disabled, p_min=1.0kW, charge_action_penalty=0.0, lambda_power skipped)")
+                print("[MILP] Runtime feeder cap in env: disabled")
+            else:
+                env.set_feeder_power_limit(7000.0)
+                print(f"[MILP] Assigner initialised (delta_t={step_hours:.4f}h, fair_mode=False, p_max_feed=7000.0kW, p_min=20.0kW, charge_action_penalty=0.2, lambda_power=0.02)")
+                print("[MILP] Runtime feeder cap in env: 7000.0kW")
         except ImportError as e:
             print(f"[MILP] Could not import MILPAssignment ({e}); running without MILP")
 

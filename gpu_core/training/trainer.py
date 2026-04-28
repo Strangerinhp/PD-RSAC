@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 
 from ..config import TrainingConfig, CheckpointConfig, LoggingConfig
-from ..networks.sac import SACAgent, FleetSACAgent
+from ..networks.sac import FleetSACAgent
 from ..features.replay_buffer import GPUReplayBuffer, Transition
+
+SACAgent = Any
 
 
 @dataclass

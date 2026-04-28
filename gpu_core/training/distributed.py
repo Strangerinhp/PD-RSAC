@@ -8,9 +8,10 @@ from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 
 from ..config import DistributedConfig
-from ..networks.sac import SACAgent
 from ..features.replay_buffer import GPUReplayBuffer
 from .trainer import SACTrainer, TrainingMetrics
+
+SACAgent = Any
 
 
 def setup_distributed(

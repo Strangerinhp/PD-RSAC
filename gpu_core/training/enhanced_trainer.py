@@ -20,8 +20,10 @@ from .trainer import SACTrainer, FleetSACTrainer, TrainingMetrics
 from .semi_mdp import SemiMDPHandler
 from .wdro import WDROAdversary, WDROConfig, ValueNetwork
 from ..config import TrainingConfig, CheckpointConfig, LoggingConfig
-from ..networks.sac import SACAgent, FleetSACAgent
+from ..networks.sac import FleetSACAgent
 from ..features.replay_buffer import GPUReplayBuffer
+
+SACAgent = Any
 
 
 DEFAULT_WDRO_VALUE_SOURCE_SWITCH_EPISODE = 80

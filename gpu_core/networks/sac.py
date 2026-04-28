@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Dict, Any, List, Union
 from dataclasses import dataclass
 import copy
 
-from .gcn_actor import GCNActor, FleetGCNActor
+from .gcn_actor import FleetGCNActor
 from .critic import TwinCritic  # Legacy flat critic
 from .gcn_critic import GCNTwinCritic, FleetGCNTwinCritic
 from ..assignment import HexVehicleAssigner

@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from collections import deque
 import time
 from collections import defaultdict
@@ -56,8 +56,10 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gpu_core.config import ConfigLoader, Config, EnvironmentConfig, TrainingConfig, DistributedConfig
-from gpu_core.networks.sac import SACAgent, FleetSACAgent
+from gpu_core.networks.sac import FleetSACAgent
 from gpu_core.spatial.neighbors import HexNeighbors
+
+SACAgent = Any
 from gpu_core.features.replay_buffer import GPUReplayBuffer
 from gpu_core.features.builder import FeatureBuilder
 from gpu_core.training.trainer import SACTrainer, FleetSACTrainer

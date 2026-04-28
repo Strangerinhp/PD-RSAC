@@ -145,11 +145,7 @@ class ActionProcessor:
         ]
         total_distances = pickup_distances + trip_distances
 
-        avg_speed_kmh = self.config.physics.avg_speed_kmh
-        step_minutes = self.config.episode.step_duration_minutes
-        duration_hours = total_distances / avg_speed_kmh
-        duration_minutes = duration_hours * 60.0
-        durations = (duration_minutes / step_minutes).clamp(min=1).long()
+        durations = self.time_dynamics.distance_to_steps(total_distances)
 
         energy_costs = self.energy_dynamics.compute_consumption(total_distances)
         feasible_mask = self._has_energy_budget(matched_vehicles, energy_costs)
@@ -246,11 +242,7 @@ class ActionProcessor:
         ]
         total_distances = pickup_distances + trip_distances
 
-        avg_speed_kmh = self.config.physics.avg_speed_kmh
-        step_minutes = self.config.episode.step_duration_minutes
-        duration_hours = total_distances / avg_speed_kmh
-        duration_minutes = duration_hours * 60.0
-        durations = (duration_minutes / step_minutes).clamp(min=1).long()
+        durations = self.time_dynamics.distance_to_steps(total_distances)
 
         energy_costs = self.energy_dynamics.compute_consumption(total_distances)
         feasible_mask = self._has_energy_budget(matched_vehicles, energy_costs)
@@ -372,10 +364,10 @@ class ActionProcessor:
             if success_mask.any():
                 succ_idx = success_mask.nonzero(as_tuple=True)[0]
                 feeder_ok = self._apply_feeder_cap_mask(ready_powers[succ_idx])
-                if feeder_ok.any():
-                    success_mask[succ_idx[~feeder_ok]] = False
-                else:
-                    success_mask &= False
+                rejected_idx = succ_idx[~feeder_ok]
+                if rejected_idx.numel() > 0:
+                    self.station_state.release_ports_batch(ready_stations[rejected_idx])
+                success_mask[rejected_idx] = False
             if success_mask.any():
                 successful_indices = ready_indices[success_mask]
                 successful_stations = ready_stations[success_mask]
@@ -496,10 +488,10 @@ class ActionProcessor:
             if success_mask.any():
                 succ_idx = success_mask.nonzero(as_tuple=True)[0]
                 feeder_ok = self._apply_feeder_cap_mask(ready_powers[succ_idx])
-                if feeder_ok.any():
-                    success_mask[succ_idx[~feeder_ok]] = False
-                else:
-                    success_mask &= False
+                rejected_idx = succ_idx[~feeder_ok]
+                if rejected_idx.numel() > 0:
+                    self.station_state.release_ports_batch(ready_stations[rejected_idx])
+                success_mask[rejected_idx] = False
             if success_mask.any():
                 successful_indices = ready_indices[success_mask]
                 successful_stations = ready_stations[success_mask]
@@ -637,13 +629,13 @@ class ActionProcessor:
                 valid_stations = waiting_stations[valid_waiting]
                 success_mask = self.station_state.batch_occupy(valid_stations)
                 if success_mask.any():
-                    candidate_powers = self.fleet_state.charge_power[valid_indices[success_mask]]
+                    succ_idx = success_mask.nonzero(as_tuple=True)[0]
+                    candidate_powers = self.fleet_state.charge_power[valid_indices[succ_idx]]
                     feeder_ok = self._apply_feeder_cap_mask(candidate_powers)
-                    if feeder_ok.any():
-                        succ_idx = success_mask.nonzero(as_tuple=True)[0]
-                        success_mask[succ_idx[~feeder_ok]] = False
-                    else:
-                        success_mask &= False
+                    rejected_idx = succ_idx[~feeder_ok]
+                    if rejected_idx.numel() > 0:
+                        self.station_state.release_ports_batch(valid_stations[rejected_idx])
+                    success_mask[rejected_idx] = False
                 if success_mask.any():
                     charging_indices = valid_indices[success_mask]
                     charging_stations = valid_stations[success_mask]

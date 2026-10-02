@@ -1,0 +1,24 @@
+# WDRO family: PD-RSAC (--milp) and its ablations (w/o MILP, w/o Graph = --wdro-metric identity,
+# diag(w) only = --wdro-metric diag, IAC = --no-critic-population).
+# Only algorithm-specific settings live here; shared settings come from base.yaml.
+# Paper VIII-A: Adam 5e-5 (actor) / 1e-4 (critics, value), gamma 0.995, rho 0.3, rho_target 0.2,
+# beta 0.3, eta_0 0.01. Per-vehicle transitions: batch 2048 vehicle decisions (Q17).
+
+base: base.yaml
+training:
+  total_episodes: 500
+  batch_size: 2048
+  learning_rate: {actor: 5.0e-05, critic: 0.0001, alpha: 0.0003}
+  gamma: 0.995
+  tau: 0.005
+  warmup_steps: 288          # decision epochs of uniform intentions (2 episodes)
+  max_grad_norm: 1.0
+  mixed_precision: true
+agent: {hidden_dim: 256, gcn_hidden: 128, emb_dim: 64, key_dim: 64, lr_value: 0.0001, updates_per_step: 1,
+  replay_window: 20, replay_recency: 0.8, tau_start: 1.0, tau_end: 0.3, tau_anneal_fraction: 0.6, init_alpha: 0.01,
+  entropy_ratio_mode: 0.5, entropy_ratio_target: 0.5, entropy_target_power: -1.0, semi_mdp: true, critic_population: true}
+wdro: {enabled: true, rho: 0.3, rho_target: 0.2, beta: 0.3, eta0: 0.01, inner_steps: 5, step_size: 0.5,
+  support_sigmas: 3.0, warmup_episodes: 20, metric: graph, lambda_init: 1.0}
+checkpoint: {checkpoint_dir: checkpoint/wdro, save_interval: 100, save_best: true, keep_last: 5}
+logging: {log_dir: logs/wdro, log_interval: 10, use_tensorboard: true, use_wandb: false, wandb_project: ev-fleet-rl}
+debug: {seed: 42}

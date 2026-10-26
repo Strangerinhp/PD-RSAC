@@ -72,7 +72,7 @@ class VehicleSAC:
         """Expected min_k Q under Pi-hat: a SERVE intention gets an order with probability p_serve
         (contention in the 1-ring at that epoch), otherwise it is a no-op."""
         q_a = torch.stack([c(inp, emb, *project_hat(s, inp, ctx, self.p_max)) for c in critics]).min(0).values
-        q_f = torch.stack([c(inp, emb, *fallback_action(s, inp, ctx, self.p_max)) for c in critics]).min(0).values
+        q_f = torch.stack([c(inp, emb, *fallback_action(s, inp, ctx, self.p_max, self.projected)) for c in critics]).min(0).values
         w = s.mode[:, 0] * (1.0 - inp["p_serve"])
         return q_a + w * (q_f - q_a)
 
@@ -137,7 +137,11 @@ class VehicleSAC:
             live = 1.0 - done
             rho_hat = float((d_star * live).sum() / live.sum().clamp(min=1.0))
             self.adversary.update_dual(rho_hat)
-            stats.update(wdro_lambda=lam, wdro_rho_hat=rho_hat, wdro_v_star=float(v_star.mean()))
+            # robust minus nominal target, R + disc V(s'(xi-hat)), on the live transitions (<= 0)
+            gap = (-lam * rho + disc * (v_star - self.adversary.last_nominal) + lam * d_star) * live
+            stats.update(wdro_lambda=lam, wdro_rho_hat=rho_hat, wdro_v_star=float(v_star.mean()),
+                         wdro_v_nom=float(self.adversary.last_nominal.mean()),
+                         wdro_gap=float(gap.sum() / live.sum().clamp(min=1.0)))
 
         # ---- critics (+ encoder)
         emb = self.embed(self.enc, ci)

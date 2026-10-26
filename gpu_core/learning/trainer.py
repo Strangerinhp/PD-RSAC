@@ -36,9 +36,10 @@ def build_adversary(cfg, agent: VehicleSAC, env, replay: ReplayBuffer, dataset=N
         arrivals, od = arrivals_from_dataset(dataset, agent.geo, env._trip_manager.step_s)
     else:
         arrivals, od = arrivals_from_replay(replay, agent.geo), None
-    metric = ScenarioMetric(agent.geo, arrivals, od, beta=w.beta, metric=w.metric, support_sigmas=w.support_sigmas)
+    metric = ScenarioMetric(agent.geo, arrivals, od, beta=w.beta, metric=w.metric, support_sigmas=w.support_sigmas,
+                            schur=w.schur)
     return Adversary(metric, rho=w.rho, rho_target=w.rho_target, eta0=w.eta0, steps=w.inner_steps,
-                     step_size=w.step_size, lam=w.lambda_init)
+                     step_size=w.step_size, lam=w.lambda_init, step_rule=w.step_rule, step_size_d=w.step_size_d)
 
 
 class Trainer:

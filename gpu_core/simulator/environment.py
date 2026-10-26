@@ -34,6 +34,8 @@ from .physics import Physics
 from .reward import RewardComputer
 from .trip_manager import TripManager
 
+FEEDER_TOL_KW = 1e-3   # a feeder filled exactly by the projection may exceed P_feed by float rounding
+
 
 @dataclass
 class EnvInfo:
@@ -268,9 +270,12 @@ class GPUEnvironmentV2:
         fleet_state_only: bool = False,
         milp_serve_trip_ids: Optional[torch.Tensor] = None,
         charge_station: Optional[torch.Tensor] = None,
+        session_power_kw: Optional[torch.Tensor] = None,
     ) -> Tuple[Union[torch.Tensor, Dict[str, torch.Tensor]], torch.Tensor, torch.Tensor, EnvInfo]:
         """One decision epoch. ``action_type`` [V]: -1 no-op, 0 SERVE, 1 CHARGE, 2 REPOSITION;
-        ``vehicle_charge_power`` is a fraction of P_max^s; ``milp_serve_trip_ids`` (trip slots)
+        ``vehicle_charge_power`` is, for a CHARGE booking, the share of the battery's free capacity
+        (at arrival) to add during the session; ``session_power_kw`` [V] sets this epoch's power of
+        vehicles in a charging session (projection; default: P_max^s); ``milp_serve_trip_ids`` (trip slots)
         selects the exact path used by the projection; ``charge_station`` [V] (-1 = nearest)."""
         k = self.current_step
         fleet, trips, info, ph = self.fleet_state, self.trip_state, self.episode_info, self.physics
@@ -289,9 +294,22 @@ class GPUEnvironmentV2:
         charging_now = (fleet.status == VehicleStatus.CHARGING) & (fleet.busy_until == k + 1)
         bought = torch.zeros(self.num_vehicles, device=self.device)
         if charging_now.any():
+            if session_power_kw is not None:                 # projection: this epoch's power (feeder)
+                req = session_power_kw.to(self.device).float().view(-1)[charging_now]
+                hi = ph.max_power(fleet.socs[charging_now])
+                clipped = int(((req > hi + 1e-4) | (req < -1e-6)).sum())
+                out.counts["power_clipped"] += clipped
+                fleet.charge_power[charging_now] = torch.minimum(req.clamp(min=0.0), hi)
             e_new, stored, grid = ph.charge(fleet.socs[charging_now], fleet.charge_power[charging_now])
             fleet.socs[charging_now] = e_new
             bought[charging_now] = grid
+            # session end: the target energy is reached (or the battery is full)
+            idx = charging_now.nonzero(as_tuple=True)[0]
+            done = (e_new >= fleet.charge_target[idx] - 1e-4) | (ph.max_power(e_new) <= 1e-3)
+            if done.any():
+                fleet.end_charging(idx[done])
+            if (~done).any():
+                fleet.busy_until[idx[~done]] = k + 2          # still charging during the next epoch
             info.energy_charged_kwh += float(stored.sum())
         feeder_kw = float(bought.sum()) / ph.step_hours
 
@@ -324,7 +342,7 @@ class GPUEnvironmentV2:
         info.feeder_load_kw = feeder_kw
         info.vehicles_charging_now = int(charging_now.sum())
         info.feeder_peak_kw = max(info.feeder_peak_kw, feeder_kw)
-        info.feeder_violation_steps += int(feeder_kw > ph.feeder_kw + 1e-6)
+        info.feeder_violation_steps += int(feeder_kw > ph.feeder_kw + FEEDER_TOL_KW)   # float rounding of a full feeder is not a violation
         for key in ("infeasible", "serve_unmatched", "charge_no_port", "power_clipped"):
             name = "infeasible_executed" if key == "infeasible" else key
             setattr(info, name, getattr(info, name) + out.counts[key])

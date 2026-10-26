@@ -3,7 +3,7 @@
 Greedy heuristic baseline of paper VIII-B (workstream G; see gpu_core/baselines/greedy.py).
 
     python gpu_core/scripts/heuristic_matching.py --split test --output results/greedy_test.json
-    python gpu_core/scripts/heuristic_matching.py --suite --out-dir results/greedy      # test, xmas, ctrl
+    python gpu_core/scripts/heuristic_matching.py --suite --out-dir results/greedy      # test, nye
 
 Runs on the shared simulator and evaluation protocol (one deterministic episode per split, same
 recorder and metrics as the learned methods). The configuration is the ``greedy`` preset
@@ -29,7 +29,7 @@ from gpu_core.evaluation.protocol import (SUITE_SPLITS, evaluate_policy_on_split
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_data_args(p, default_split='test')
-    p.add_argument('--suite', action='store_true', help='run the whole protocol (test, xmas, ctrl) into --out-dir')
+    p.add_argument('--suite', action='store_true', help='run the whole protocol (test, nye) into --out-dir')
     p.add_argument('--out-dir', default=None)
     p.add_argument('--num-vehicles', type=int, default=None)
     p.add_argument('--num-hexes', type=int, default=None, help='synthetic runs only')

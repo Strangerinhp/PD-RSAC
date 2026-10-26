@@ -5,7 +5,9 @@ Input per vehicle (only vehicles available at this decision epoch are read):
 - ``mode``: -1 no-op, 0 SERVE, 1 CHARGE, 2 REPOSITION;
 - ``repos_target``: target cell for REPOSITION (the vehicle's own cell = stay);
 - ``station``: station index for CHARGE (-1 = nearest station);
-- ``power_frac``: charging power as a fraction of P_max^s (default 1);
+- ``power_frac``: for CHARGE, the share of the free battery capacity at arrival to add in the
+  session (default 1 = full); the session charges at P_max^s (the projection may lower the power
+  of vehicles in a session each epoch, under the feeder) and the vehicle is busy until done;
 - ``serve_trip``: trip slot for SERVE, only on the exact (projection) path.
 
 A no-op keeps the current activity for one epoch: an IDLE vehicle stays, a CHARGING vehicle
@@ -55,9 +57,10 @@ class Outcome:
     target_cell: torch.Tensor     # drop-off / reposition target / station cell, -1 otherwise
     station: torch.Tensor         # booked or continued station, -1 otherwise
     trip: torch.Tensor            # trip slot accepted, -1 otherwise
-    power_kw: torch.Tensor        # power for the (first / next) charging step
+    power_kw: torch.Tensor        # nominal session power (kW) of a booking
     fare: torch.Tensor            # fare credited at acceptance
     drive_km: torch.Tensor        # km whose driving cost is booked now
+    charge_frac: torch.Tensor = None  # share of the free capacity a booking will add (0 otherwise)
     counts: Dict[str, int] = field(default_factory=dict)
 
 
@@ -108,6 +111,7 @@ class ActionExecutor:
             power_kw=torch.zeros(V, device=dev),
             fare=torch.zeros(V, device=dev),
             drive_km=torch.zeros(V, device=dev),
+            charge_frac=torch.zeros(V, device=dev),
             counts={"decisions": int(avail.sum()), "infeasible": 0, "serve_unmatched": 0,
                     "charge_no_port": 0, "power_clipped": 0, "released": 0},
         )
@@ -345,7 +349,11 @@ class ActionExecutor:
         km = self.dist[fleet.positions[i], cell]
         T = ph.travel_steps(km)
         fleet.socs[i] -= ph.energy(km)
-        p = frac[i].clamp(min=0.0) * ph.p_max_kw if frac is not None else torch.full((len(i),), ph.p_max_kw, device=dev)
-        p = self._clip_power(p, fleet.socs[i], exact, out)
-        fleet.start_charge_travel(i, s, cell, k + T, p)
-        self._record(out, i, EXEC_CHARGE, T + 1, target=cell, station=s, km=km, power=p)
+        f = frac[i].clamp(0.0, 1.0) if frac is not None else torch.ones(len(i), device=dev)
+        e_arr = fleet.socs[i]
+        target = e_arr + f * (ph.battery_kwh - e_arr).clamp(min=0.0)
+        p = torch.full((len(i),), ph.p_max_kw, device=dev)
+        fleet.start_charge_travel(i, s, cell, k + T, p, target)
+        # duration 0 = until the session ends (T + charging epochs, not known in advance under the feeder)
+        self._record(out, i, EXEC_CHARGE, 0, target=cell, station=s, km=km, power=p)
+        out.charge_frac[i] = f

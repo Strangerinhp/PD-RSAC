@@ -2,7 +2,9 @@
 
 Every entrypoint (train, evaluate, power-grid evaluation, baselines, heuristic) goes through
 ``build_env`` so that cells, distances, stations and trips are identical across scripts
-(audit D22, D23, F40, F41). Real data always needs the spatial manifest; synthetic trips
+(audit D22, D23, F40, F41). The simulator runs on ``SIM_DEVICE`` (CPU) whatever device the
+networks use: matching, bookings and the MILP are sequential / numpy and the fleet tensors are
+small, so a GPU would only add transfers; the learners move what they read to their device. Real data always needs the spatial manifest; synthetic trips
 are only used when explicitly requested (``synthetic=True``), never as a silent fallback.
 """
 
@@ -20,6 +22,7 @@ from ..spatial.manifest import SpatialManifest, haversine_km
 from .dataset import TripDataset, resolve_path
 
 SYNTHETIC_CENTER = (40.758, -73.9855)  # Midtown Manhattan
+SIM_DEVICE = torch.device("cpu")
 
 
 def load_manifest(config: Config) -> SpatialManifest:
@@ -110,7 +113,7 @@ def _fill_grid(grid: HexGrid, cells, lat, lon, detour: float, intra_km: float, d
 def add_data_args(parser, default_split: str = "test") -> None:
     """CLI options shared by every evaluation entrypoint."""
     parser.add_argument("--split", default=default_split,
-                        help="Configured data split to run on (e.g. test, val, xmas, ctrl); one episode spans the split")
+                        help="Configured data split to run on (e.g. test, val, nye); one episode spans the split")
     parser.add_argument("--synthetic", action="store_true", help="Synthetic trips on a small H3 disk (smoke tests only)")
     parser.add_argument("--manifest", default=None, help="Override data.manifest_path")
     parser.add_argument("--processed-root", default=None, help="Override data.processed_root")
@@ -121,6 +124,8 @@ def apply_data_args(config: Config, args) -> None:
         config.data.manifest_path = args.manifest
     if getattr(args, "processed_root", None):
         config.data.processed_root = args.processed_root
+    if getattr(args, "sample_ratio", None) is not None:
+        config.data.sample_ratio = float(args.sample_ratio)
 
 
 def config_for_evaluation(checkpoint: dict, yaml_path: Optional[str] = None) -> Config:
@@ -134,6 +139,11 @@ def config_for_evaluation(checkpoint: dict, yaml_path: Optional[str] = None) -> 
         raise ValueError("checkpoint has no embedded run config; pass --config")
     config = Config()
     ConfigLoader._update_dataclass(config, embedded)
+    # evaluation splits added after the checkpoint was trained (e.g. nye, round 11); the
+    # training splits stay those of the checkpoint
+    from ..config.base import _default_splits
+    for name, span in _default_splits().items():
+        config.data.splits.setdefault(name, span)
     # checkpoints written before milp.enabled existed recorded the switch only as a CLI argument
     if "enabled" not in (embedded.get("milp") or {}) and (checkpoint.get("run_args") or {}).get("milp"):
         config.milp.enabled = True

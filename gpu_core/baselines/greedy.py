@@ -14,8 +14,10 @@ Per decision epoch, over the deciding vehicles:
    (the shared pickup radius, Q3a) and E - eta (d_pickup + d_trip) >= E_min (Eq. 4) gets its
    immediate profit fare - c_drv (d_pickup + d_trip) (Eq. 8; electricity is paid when charging);
    the best remaining pair is taken until no feasible pair with profit > ``min_profit`` is left;
-3. everything else: a charger below ``charge_target`` keeps charging, otherwise unplugs; an idle
-   vehicle stays (the paper describes no rebalancing).
+3. everything else stays (the paper describes no rebalancing).
+
+Charging is a session (round 6): a booking adds the share of the free capacity that brings the
+battery to ``charge_target`` (80 %), and the vehicle is busy until done.
 
 The chosen (vehicle, trip, station, power) go to the simulator's exact path, so the pairs the
 heuristic matched are the pairs executed (no re-matching); every action is feasible by
@@ -81,7 +83,9 @@ class GreedyPolicy:
                 if e_arr < -1e-6 or p_frac(max(e_arr, 0.0)) * ph.p_max_kw < ph.p_min_kw:
                     continue
                 free[s] -= 1
-                mode[v], station[v], power[v], decided[v] = CHARGE, s, p_frac(max(e_arr, 0.0)), True
+                e0 = max(e_arr, 0.0)
+                share = (self.charge_target * cap - e0) / max(cap - e0, 1e-9)
+                mode[v], station[v], power[v], decided[v] = CHARGE, s, float(np.clip(share, 0.0, 1.0)), True
                 break
 
         # 2) iterative greedy matching on immediate profit

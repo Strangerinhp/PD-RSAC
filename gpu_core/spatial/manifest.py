@@ -8,10 +8,16 @@ split, month and algorithm. It fixes:
 - the road-detour factor and the mean intra-cell travel distance used by the simulator;
 - the charging-station layout (cells, ports) and its coverage metrics.
 
-Domain rule (Q23): rank cells by endpoint count in the training trips, keep the smallest
-prefix such that a target share of trips has *both* endpoints inside, keep the largest
-connected component, connect other components only when they carry a meaningful share,
-then fill enclosed holes. Station rule (Q13b): demand-weighted set cover so that every
+Domain rule (Q23), two variants for the seed set of cells:
+
+- ``min_daily_endpoints`` (default 0.5, vong 4): every cell with on average at least that many
+  trip endpoints (pickups + drop-offs) per day in the training trips, all of them (before the
+  trip sample);
+- ``coverage``: rank cells by endpoint count and keep the smallest prefix such that a target
+  share of trips has *both* endpoints inside (the earlier 99.9 % rule).
+
+Then keep the largest connected component, connect other components only when they carry a
+meaningful share, and fill enclosed holes. Station rule (Q13b): demand-weighted set cover so that every
 "active" cell lies within ``cover_rings`` of a station, then fill the remaining stations by
 pickup demand; at most one station per cell.
 """
@@ -140,19 +146,34 @@ def select_domain(
     coverage: float = 0.999,
     min_component_share: float = 0.0005,
     hole_min_neighbors: int = 4,
+    min_daily_endpoints: Optional[float] = None,
+    num_days: Optional[int] = None,
 ) -> Tuple[List[str], Dict]:
-    """Return (sorted cell ids, report) for the service domain (Q23)."""
-    if not 0 < coverage <= 1:
-        raise ValueError("coverage must be in (0, 1]")
+    """Return (sorted cell ids, report) for the service domain (Q23). With
+    ``min_daily_endpoints`` the seed cells are those with at least that many trip endpoints per
+    day on average over ``num_days`` days; otherwise the ``coverage`` prefix rule is used."""
     n_trips = len(pickup_cells)
     if n_trips == 0:
         raise ManifestError("no training trips to build the domain from")
     uniq, counts = np.unique(np.concatenate([pickup_cells, dropoff_cells]), return_counts=True)
     order = np.lexsort((uniq, -counts))                       # by count desc, then id
-    rank = np.empty(len(uniq), dtype=np.int64)
-    rank[order] = np.arange(len(uniq))
-    need = np.maximum(rank[np.searchsorted(uniq, pickup_cells)], rank[np.searchsorted(uniq, dropoff_cells)])
-    k = int(np.sort(need)[int(math.ceil(coverage * n_trips)) - 1]) + 1
+    if min_daily_endpoints is not None:
+        if not num_days or num_days <= 0:
+            raise ValueError("min_daily_endpoints needs the number of training days")
+        if min_daily_endpoints <= 0:
+            raise ValueError("min_daily_endpoints must be positive")
+        k = int((counts / num_days >= min_daily_endpoints).sum())
+        rule = {"rule": "min_daily_endpoints", "min_daily_endpoints": min_daily_endpoints, "days": int(num_days)}
+    else:
+        if not 0 < coverage <= 1:
+            raise ValueError("coverage must be in (0, 1]")
+        rank = np.empty(len(uniq), dtype=np.int64)
+        rank[order] = np.arange(len(uniq))
+        need = np.maximum(rank[np.searchsorted(uniq, pickup_cells)], rank[np.searchsorted(uniq, dropoff_cells)])
+        k = int(np.sort(need)[int(math.ceil(coverage * n_trips)) - 1]) + 1
+        rule = {"rule": "coverage", "coverage_target": coverage}
+    if k == 0:
+        raise ManifestError("the domain rule keeps no cell")
     top = {h3.int_to_str(int(c)) for c in uniq[order[:k]]}
     weight = {h3.int_to_str(int(c)): int(n) for c, n in zip(uniq, counts)}
     total_w = float(counts.sum())
@@ -186,7 +207,7 @@ def select_domain(
     dset = set(h3.str_to_int(c) for c in cells)
     inside = np.isin(pickup_cells, list(dset)) & np.isin(dropoff_cells, list(dset))
     report = {
-        "coverage_target": coverage,
+        **rule,
         "top_k_cells": k,
         "cells": len(cells),
         "trips_considered": int(n_trips),
@@ -389,12 +410,13 @@ def build_manifest(
     ports_per_station: int = 5,
     cover_rings: int = 2,
     cover_min_daily_pickups: float = 1.0,
-    sample_ratio: float = 0.1,
+    sample_ratio: float = 0.12,
     charge_power_kw: float = 50.0,
-    feeder_kw: float = 7000.0,
+    feeder_kw: float = 5000.0,
     detour_sample: int = 200_000,
     seed: int = 0,
     verbose: bool = True,
+    min_daily_endpoints: Optional[float] = None,
 ) -> SpatialManifest:
     """Build the manifest from the processed training days [train_start, train_end)."""
     if num_stations * ports_per_station * charge_power_kw <= feeder_kw:
@@ -413,7 +435,8 @@ def build_manifest(
     pc = np.concatenate([t.column("pickup_cell").to_numpy() for t in cell_tables]).astype(np.uint64)
     dc = np.concatenate([t.column("dropoff_cell").to_numpy() for t in cell_tables]).astype(np.uint64)
     del cell_tables
-    cells, domain_report = select_domain(pc, dc, coverage=coverage)
+    cells, domain_report = select_domain(pc, dc, coverage=coverage, min_daily_endpoints=min_daily_endpoints,
+                                         num_days=len(days))
     cellset = set(cells)
     index = {c: i for i, c in enumerate(cells)}
 
@@ -474,7 +497,9 @@ def build_manifest(
     m.validate()
     if verbose:
         dr = domain_report
-        print(f"[manifest] r{resolution}: {len(cells)} cells (top-k {dr['top_k_cells']}, +{len(dr['connector_cells_added'])} connectors, "
+        seed = (f">= {dr['min_daily_endpoints']:g} endpoints/day" if dr["rule"] == "min_daily_endpoints"
+                else f"{dr['coverage_target']:.3%} coverage")
+        print(f"[manifest] r{resolution}: {len(cells)} cells (seed {seed}: {dr['top_k_cells']}, +{len(dr['connector_cells_added'])} connectors, "
               f"+{len(dr['hole_cells_added'])} holes, {len(dr['dropped_components'])} dropped comps); "
               f"trips inside {dr['trip_share_inside']:.4%}; detour {detour:.3f}; intra-cell {intra:.2f} km")
         sr = station_report
@@ -492,18 +517,23 @@ def main(argv=None):
     p.add_argument("--train-end", required=True, help="Day after the last training day (exclusive), YYYY-MM-DD")
     p.add_argument("--out", required=True)
     p.add_argument("--resolution", type=int, default=7)
-    p.add_argument("--coverage", type=float, default=0.999)
+    p.add_argument("--min-daily-endpoints", type=float, default=0.5,
+                   help="domain seed: cells with at least this many trip endpoints per day (all training trips); "
+                        "set 0 to use --coverage instead")
+    p.add_argument("--coverage", type=float, default=0.999,
+                   help="domain seed when --min-daily-endpoints is 0: smallest set of cells holding this share of trips")
     p.add_argument("--num-stations", type=int, default=35)
     p.add_argument("--ports-per-station", type=int, default=5)
     p.add_argument("--cover-rings", type=int, default=2)
     p.add_argument("--cover-min-daily-pickups", type=float, default=1.0)
-    p.add_argument("--sample-ratio", type=float, default=0.1)
+    p.add_argument("--sample-ratio", type=float, default=0.12)
     p.add_argument("--charge-power-kw", type=float, default=50.0)
-    p.add_argument("--feeder-kw", type=float, default=7000.0)
+    p.add_argument("--feeder-kw", type=float, default=5000.0)
     a = p.parse_args(argv)
     m = build_manifest(a.processed_root, a.datasets, a.train_start, a.train_end, a.resolution, a.coverage,
                        a.num_stations, a.ports_per_station, a.cover_rings, a.cover_min_daily_pickups,
-                       a.sample_ratio, a.charge_power_kw, a.feeder_kw)
+                       a.sample_ratio, a.charge_power_kw, a.feeder_kw,
+                       min_daily_endpoints=a.min_daily_endpoints if a.min_daily_endpoints > 0 else None)
     m.save(a.out)
     print(f"[manifest] saved {a.out} (spatial {m.spatial_hash[:12]}, infra {m.infra_hash[:12]})")
 

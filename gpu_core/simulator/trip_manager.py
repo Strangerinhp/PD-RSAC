@@ -26,8 +26,10 @@ if TYPE_CHECKING:
     from ..data.dataset import TripDataset
 
 # Synthetic demand mirrors the real experiment per vehicle: new orders per vehicle per 5-min
-# epoch by hour of day, for a 10 % sample of the January 2009 training days with 1000 vehicles
-# (manifest pickup_by_hour). Fares follow the least-squares fit fare = 3.50 + 1.37 * km.
+# epoch by hour of day, measured on a 10 % sample of the January 2009 training days with 1000
+# vehicles (manifest pickup_by_hour) and scaled linearly to ``data.sample_ratio``. Fares follow
+# the least-squares fit fare = 3.50 + 1.37 * km.
+SYNTHETIC_RATE_SAMPLE = 0.1
 SYNTHETIC_RATE_BY_HOUR = (0.129, 0.094, 0.071, 0.053, 0.037, 0.030, 0.067, 0.123, 0.163, 0.163, 0.148, 0.153,
                           0.167, 0.169, 0.176, 0.177, 0.168, 0.192, 0.229, 0.235, 0.204, 0.192, 0.186, 0.162)
 SYNTHETIC_FARE = (3.50, 1.37)
@@ -121,7 +123,7 @@ class TripManager:
 
     def _synthetic_count(self, step: int) -> int:
         hour = (self.epoch_s(step) % 86400) // 3600
-        lam = SYNTHETIC_RATE_BY_HOUR[hour] * self.num_vehicles
+        lam = SYNTHETIC_RATE_BY_HOUR[hour] * self.num_vehicles * self.config.data.sample_ratio / SYNTHETIC_RATE_SAMPLE
         return int(torch.poisson(torch.tensor(float(lam)), generator=self._rng).item())
 
     def _generate_synthetic(self, n: int, initial: bool):

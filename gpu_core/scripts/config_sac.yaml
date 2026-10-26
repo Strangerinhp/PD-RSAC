@@ -1,5 +1,6 @@
-# SAC family: vehicle-level SAC baseline and, with --milp, the 'w/o WDRO' ablation (SAC + MILP, Q12b).
-# Same networks, candidates and executor as PD-RSAC; fixed-gamma bootstrap, no WDRO (Q12).
+# SAC family: vehicle-level SAC baseline (fixed gamma per decision, Q12) and the 'w/o WDRO' ablation
+# (preset sac_milp: PD-RSAC with the robust target off, semi-MDP and MILP kept, Q12b round 7).
+# Same networks, candidates and executor as PD-RSAC; no WDRO.
 # Only algorithm-specific settings live here; shared settings come from base.yaml.
 
 base: base.yaml
@@ -7,7 +8,7 @@ training:
   total_episodes: 500
   batch_size: 2048
   learning_rate: {actor: 5.0e-05, critic: 0.0001, alpha: 0.0003}
-  gamma: 0.995
+  gamma: 0.999              # shared by every family (round 7): per step for semi-MDP, per decision otherwise
   tau: 0.005
   warmup_steps: 288
   max_grad_norm: 1.0
@@ -17,5 +18,5 @@ agent: {hidden_dim: 256, gcn_hidden: 128, emb_dim: 64, key_dim: 64, lr_value: 0.
   entropy_ratio_mode: 0.5, entropy_ratio_target: 0.5, entropy_target_power: -1.0, semi_mdp: false, critic_population: true}
 wdro: {enabled: false}
 checkpoint: {checkpoint_dir: checkpoint/sac, save_interval: 100, save_best: true, keep_last: 5}
-logging: {log_dir: logs/sac, log_interval: 10, use_tensorboard: true, use_wandb: false, wandb_project: ev-fleet-rl}
+logging: {log_dir: logs/sac, log_interval: 1, use_tensorboard: true, use_wandb: false, wandb_project: ev-fleet-rl}
 debug: {seed: 42}

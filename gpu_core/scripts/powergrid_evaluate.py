@@ -2,7 +2,7 @@
 """
 Charging power drawn from the grid over one split or calendar day (paper Fig. 6; F5, F48).
 
-    python gpu_core/scripts/powergrid_evaluate.py --checkpoint checkpoint/full/best.pt --split xmas \
+    python gpu_core/scripts/powergrid_evaluate.py --checkpoint checkpoint/full/best.pt --split nye \
         --out-csv powergrid.csv --out-json powergrid.json
     python gpu_core/scripts/powergrid_evaluate.py --preset greedy --day 2009-01-27 --out-csv greedy.csv
 
@@ -23,7 +23,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from gpu_core.data.factory import add_data_args, apply_data_args, build_run, config_for_evaluation, split_hours  # noqa: E402
+from gpu_core.data.factory import SIM_DEVICE, add_data_args, apply_data_args, build_run, config_for_evaluation, split_hours  # noqa: E402
 
 FIELDS = ["label", "day", "step", "date", "timestamp_hhmm", "minute_of_day", "total_charging_power_kw",
           "num_vehicles_charging", "mean_power_per_vehicle_kw", "feeder_violation", "ports_held"]
@@ -38,7 +38,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--milp", dest="milp", action="store_true", default=None, help="force the MILP projection")
     p.add_argument("--no-milp", dest="milp", action="store_false", help="force the raw executor")
     p.add_argument("--day", default=None, help="single calendar day YYYY-MM-DD of a configured dataset; overrides --split")
-    add_data_args(p, default_split="xmas")
+    add_data_args(p, default_split="nye")
     p.add_argument("--num-vehicles", type=int, default=None, help="with --preset greedy")
     p.add_argument("--seed", type=int, default=10_000)
     p.add_argument("--max-steps", type=int, default=None)
@@ -86,7 +86,7 @@ def main(argv=None) -> Dict:
         split = f"day:{args.day}"
         config.data.splits[split] = [args.day, (pd.Timestamp(args.day) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")]
     config.episode.duration_hours = 24.0 if args.synthetic else split_hours(config, split)
-    run = build_run(config, device, split=split, synthetic=args.synthetic)
+    run = build_run(config, SIM_DEVICE, split=split, synthetic=args.synthetic)
     if checkpoint is not None:
         from gpu_core.learning.evaluation import load_vehicle_agent
         agent = load_vehicle_agent(checkpoint, config, run.env, device, projected=run.projection is not None)

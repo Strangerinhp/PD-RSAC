@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gpu_core.config import Config, ConfigLoader  # noqa: E402
 from gpu_core.data.dataset import resolve_path  # noqa: E402
-from gpu_core.data.factory import build_env  # noqa: E402
+from gpu_core.data.factory import SIM_DEVICE, build_env  # noqa: E402
 from gpu_core.utils.run_record import build_run_record, write_run_record  # noqa: E402
 
 VARIANT_FLAGS = ('milp', 'wdro', 'semi_mdp', 'wdro_metric', 'critic_population')
@@ -58,6 +58,8 @@ def parse_args(argv=None):
     parser.add_argument('--synthetic', action='store_true', help='synthetic trips on a small H3 disk (smoke tests only)')
     parser.add_argument('--manifest', type=str, default=None, help='override data.manifest_path')
     parser.add_argument('--processed-root', type=str, default=None, help='override data.processed_root')
+    parser.add_argument('--sample-ratio', type=float, default=None,
+                        help='override data.sample_ratio (trip sample of every split; stored in the checkpoint)')
     # variant switches (refused together with --preset)
     parser.add_argument('--milp', dest='milp', action='store_true', default=None,
                         help='MILP feasible-action projection (Eq. 12-16, requires Gurobi); sets milp.enabled')
@@ -107,13 +109,17 @@ def create_config(args) -> Config:
                       ('batch_size', 'training.batch_size'), ('warmup_steps', 'training.warmup_steps'),
                       ('checkpoint_dir', 'checkpoint.checkpoint_dir'), ('save_interval', 'checkpoint.save_interval'),
                       ('log_interval', 'logging.log_interval'), ('semi_mdp', 'agent.semi_mdp'), ('wdro', 'wdro.enabled'),
-                      ('wdro_rho', 'wdro.rho'), ('wdro_metric', 'wdro.metric'),
+                      ('wdro_metric', 'wdro.metric'),
                       ('critic_population', 'agent.critic_population'), ('manifest', 'data.manifest_path'),
-                      ('processed_root', 'data.processed_root')):
+                      ('processed_root', 'data.processed_root'), ('sample_ratio', 'data.sample_ratio')):
         value = getattr(args, flag, None)
         if value is not None:
             section, name = key.split('.')
             setattr(getattr(config, section), name, value)
+    if getattr(args, 'wdro_rho', None) is not None:
+        # one budget for the target and the dual (round 7), metric steps of rho / 2 (round 8)
+        config.wdro.rho = config.wdro.rho_target = float(args.wdro_rho)
+        config.wdro.step_size_d = float(args.wdro_rho) / 2.0
     if getattr(args, 'milp', None) is not None:
         config.milp.enabled = bool(args.milp)
     if args.mixed_precision:
@@ -126,7 +132,7 @@ def train_single_gpu(args):
     device = get_device(args)
     config = create_config(args)
     # Data: spatial manifest + training split, or explicit synthetic trips (no silent fallback)
-    env, train_data, manifest = build_env(config, device, split='train', synthetic=args.synthetic, verbose=False)
+    env, train_data, manifest = build_env(config, SIM_DEVICE, split='train', synthetic=args.synthetic, verbose=False)
     # Provenance: resolved config + manifest, written once and embedded in every checkpoint.
     log_dir = os.path.join(config.logging.log_dir, f"run_{int(time.time())}")
     run_record = build_run_record(

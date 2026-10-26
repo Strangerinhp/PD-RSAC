@@ -15,7 +15,7 @@ observation, 1-ring summary, candidate features and masks for the 91 reposition 
 follow Eq. (4): SERVE is only available when an energy-feasible order is in the 1-ring.
 
 Counts are divided by the mean number of vehicles per cell, so a 100-vehicle run on a 1 %
-sample sees the same feature scale as 1000 vehicles on a 10 % sample.
+sample sees the same feature scale as 1000 vehicles on the full sample (same ratio).
 """
 
 from dataclasses import dataclass, fields

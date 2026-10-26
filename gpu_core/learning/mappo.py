@@ -5,10 +5,11 @@ Same encoder, actor network, candidates and executor / projection as PD-RSAC. On
 - one episode is collected with the stochastic policy (exact categorical samples, Gaussian power),
   then ``update_epochs`` passes of minibatch PPO over every per-vehicle transition of it;
 - value V(o_i, m_i, g) (local value; ``ValueNet``), trained with the shared encoder;
-- per-vehicle transitions close when the vehicle decides again; returns use a fixed gamma per
-  decision (R = rewards over the transition, bootstrap gamma V(s')), GAE(lambda) along each
-  vehicle's chain of decisions; the episode end is a truncation, so the last transition is
-  bootstrapped;
+- per-vehicle transitions close when the vehicle decides again; GAE(lambda) along each vehicle's
+  chain of decisions with the discount of each transition: gamma per decision (fixed gamma, Q12;
+  R = undiscounted rewards over the transition) or, with ``agent.semi_mdp``, gamma^Delta for a
+  transition of Delta epochs (R = sum_k gamma^k r_{t+k}, as PD-RSAC); the episode end is a
+  truncation, so the last transition is bootstrapped;
 - clipped surrogate on the joint log-probability of the intention (Eq. 7), entropy bonus
   ``ent_coef`` x H (mode, conditional target and power), clipped value loss.
 With the MILP the projection is part of the environment: the ratio is on the intention.
@@ -25,18 +26,21 @@ from .networks import Actor, GCNEncoder, ValueNet
 from .policy import joint_log_prob, policy_entropy, sample
 
 
-def gae(R, done, v_cur, v_nxt, veh, t, gamma, lam):
+def gae(R, done, v_cur, v_nxt, veh, t, gamma, lam, steps=None):
     """GAE(lambda) along each vehicle's chain of decisions (transitions sorted by start epoch).
-    delta_j = R_j + gamma (1 - done_j) V(s'_j) - V(s_j); A_j = delta_j + gamma lam (1 - done_j) A_{j+1}."""
+    With d_j the discount of transition j (gamma, or gamma^Delta_j when ``steps`` holds the
+    Delta of each transition, semi-MDP):
+    delta_j = R_j + d_j (1 - done_j) V(s'_j) - V(s_j);  A_j = delta_j + d_j lam (1 - done_j) A_{j+1}."""
     R, done = np.asarray(R, np.float64), np.asarray(done, np.float64)
-    delta = R + gamma * (1.0 - done) * np.asarray(v_nxt, np.float64) - np.asarray(v_cur, np.float64)
+    d = np.full(len(R), float(gamma)) if steps is None else float(gamma) ** np.asarray(steps, np.float64)
+    delta = R + d * (1.0 - done) * np.asarray(v_nxt, np.float64) - np.asarray(v_cur, np.float64)
     adv = np.zeros(len(R), np.float64)
     for v in np.unique(veh):
         idx = np.nonzero(veh == v)[0]
         idx = idx[np.argsort(t[idx], kind="stable")]
         run = 0.0
         for j in idx[::-1]:
-            run = delta[j] + gamma * lam * (1.0 - done[j]) * run
+            run = delta[j] + d[j] * lam * (1.0 - done[j]) * run
             adv[j] = run
     return adv
 
@@ -62,7 +66,7 @@ class VehicleMAPPO:
         self.vf_coef, self.ent_coef = float(tr.vf_coef), float(tr.ent_coef)
         self.epochs, self.batch = int(tr.update_epochs), int(tr.batch_size)
         self.max_grad_norm = float(tr.max_grad_norm)
-        self.semi_mdp = False                       # fixed gamma (Q12)
+        self.semi_mdp = bool(a.semi_mdp)            # gamma^Delta per transition; False = fixed gamma (Q12)
         self.adversary = None
         self.updates = 0
         self.tau = a.tau_start                      # unused by exact sampling; kept for the loop / trainer
@@ -98,7 +102,8 @@ class VehicleMAPPO:
             for r, b in replay.current_rows(self.device):
                 v_cur[r] = self._v(self.inputs(b["snap"], b["cur"]))[0].cpu().numpy()
                 v_nxt[r] = self._v(self.inputs(b["snap"], b["nxt"]))[0].cpu().numpy()
-        adv = gae(rows["R"][:n], rows["done"][:n], v_cur, v_nxt, rows["veh"][:n], rows["t"][:n], self.gamma, self.lam)
+        adv = gae(rows["R"][:n], rows["done"][:n], v_cur, v_nxt, rows["veh"][:n], rows["t"][:n], self.gamma, self.lam,
+                  steps=rows["delta"][:n] if self.semi_mdp else None)
         ret = (adv + v_cur).astype(np.float32)
         adv_n = ((adv - adv.mean()) / (adv.std() + 1e-8)).astype(np.float32)
         extra = {"adv": adv_n, "ret": ret, "v_old": v_cur}

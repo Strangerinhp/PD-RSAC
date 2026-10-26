@@ -5,8 +5,8 @@
 | IDLE            | no           | every epoch     | any action                                          |
 | SERVING         | no           | no              | T(pickup) + T(trip) elapsed -> IDLE at the drop-off |
 | REPOSITIONING   | no           | no              | T elapsed -> IDLE at the target                     |
-| CHARGE_TRAVEL   | yes (booked) | no              | arrives -> charges one step -> CHARGING              |
-| CHARGING        | yes          | every epoch     | continue (one more step) or any other action        |
+| CHARGE_TRAVEL   | yes (booked) | no              | arrives -> CHARGING (charges from the arrival epoch) |
+| CHARGING        | yes          | no              | session: charges until ``charge_target`` -> IDLE     |
 
 ``busy_until`` is the decision epoch at which the current commitment ends; -1 means not
 committed. Every commitment lasts at least one epoch. Energy (``socs``) is in kWh.
@@ -53,6 +53,7 @@ class TensorFleetState:
         self.charging_station = torch.full((num_vehicles,), -1, dtype=torch.long, device=self.device)
         # Power (kW) for the vehicle's current or next charging step.
         self.charge_power = torch.zeros(num_vehicles, dtype=torch.float32, device=self.device)
+        self.charge_target = torch.zeros(num_vehicles, dtype=torch.float32, device=self.device)   # kWh at session end
         # Consecutive epochs spent IDLE (diagnostics only).
         self.idle_steps = torch.zeros(num_vehicles, dtype=torch.int64, device=self.device)
 
@@ -96,13 +97,21 @@ class TensorFleetState:
         self.current_trip[idx] = -1
         self._clear_charging(idx)
 
-    def start_charge_travel(self, idx, stations, station_cells, busy_until, power_kw) -> None:
+    def start_charge_travel(self, idx, stations, station_cells, busy_until, power_kw, target_kwh=None) -> None:
         self.status[idx] = VehicleStatus.CHARGE_TRAVEL
         self.charging_station[idx] = stations
         self.target_hex[idx] = station_cells
         self.busy_until[idx] = busy_until
         self.charge_power[idx] = power_kw
+        self.charge_target[idx] = self.max_soc if target_kwh is None else target_kwh
         self.current_trip[idx] = -1
+
+    def end_charging(self, idx) -> None:
+        """Session done: IDLE at the station, port released, decides at the next epoch."""
+        self.status[idx] = VehicleStatus.IDLE
+        self.busy_until[idx] = NOT_BUSY
+        self.target_hex[idx] = -1
+        self._clear_charging(idx)
 
     def continue_charging(self, idx, busy_until, power_kw) -> None:
         self.busy_until[idx] = busy_until
@@ -119,6 +128,7 @@ class TensorFleetState:
     def _clear_charging(self, idx) -> None:
         self.charging_station[idx] = -1
         self.charge_power[idx] = 0.0
+        self.charge_target[idx] = 0.0
 
     def complete(self, current_step: int):
         """Apply commitments ending at ``current_step``. Returns masks
@@ -152,7 +162,7 @@ class TensorFleetState:
         new = TensorFleetState.__new__(TensorFleetState)
         new.num_vehicles, new.device, new.max_soc = self.num_vehicles, self.device, self.max_soc
         for name in ("positions", "socs", "status", "busy_until", "target_hex", "current_trip",
-                     "charging_station", "charge_power", "idle_steps"):
+                     "charging_station", "charge_power", "charge_target", "idle_steps"):
             setattr(new, name, getattr(self, name).clone())
         return new
 

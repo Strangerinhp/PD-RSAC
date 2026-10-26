@@ -3,13 +3,21 @@
 # Only algorithm-specific settings live here; shared settings come from base.yaml.
 # Paper VIII-A: Adam 5e-5 (actor) / 1e-4 (critics, value), gamma 0.995, rho 0.3, rho_target 0.2,
 # beta 0.3, eta_0 0.01. Per-vehicle transitions: batch 2048 vehicle decisions (Q17).
+# Round 7: gamma 0.999 per 5-minute step (horizon ~3.5 days; 0.995 per step was ~17 h, shorter than
+# the weekly test), shared by every family; rho = rho_target = 0.2 (the target and the dual update
+# use the same budget); eta_0 0.5 so that lambda still moves after ~10^5 dual updates.
+# Round 8: the adversary steps along the metric's steepest descent direction S^-1 grad f, each
+# step rho / 2 = 0.05 long in d_Q (step_size, in sigma units, is only used by step_rule: sigma),
+# and the 2-hop restriction uses the Schur complement of Q. rho = rho_target = 0.1: with the metric
+# step the graph adversary is ~20 % stronger at a given rho, and rho 0.2 already destabilised the
+# critic of the full-scale run around episode 300 (round 7).
 
 base: base.yaml
 training:
   total_episodes: 500
   batch_size: 2048
   learning_rate: {actor: 5.0e-05, critic: 0.0001, alpha: 0.0003}
-  gamma: 0.995
+  gamma: 0.999              # shared by every family (round 7): per step for semi-MDP, per decision otherwise
   tau: 0.005
   warmup_steps: 288          # decision epochs of uniform intentions (2 episodes)
   max_grad_norm: 1.0
@@ -17,8 +25,9 @@ training:
 agent: {hidden_dim: 256, gcn_hidden: 128, emb_dim: 64, key_dim: 64, lr_value: 0.0001, updates_per_step: 1,
   replay_window: 20, replay_recency: 0.8, tau_start: 1.0, tau_end: 0.3, tau_anneal_fraction: 0.6, init_alpha: 0.01,
   entropy_ratio_mode: 0.5, entropy_ratio_target: 0.5, entropy_target_power: -1.0, semi_mdp: true, critic_population: true}
-wdro: {enabled: true, rho: 0.3, rho_target: 0.2, beta: 0.3, eta0: 0.01, inner_steps: 5, step_size: 0.5,
-  support_sigmas: 3.0, warmup_episodes: 20, metric: graph, lambda_init: 1.0}
+wdro: {enabled: true, rho: 0.1, rho_target: 0.1, beta: 0.3, eta0: 0.5, inner_steps: 5, step_size: 0.5,
+  step_rule: metric, step_size_d: 0.05, schur: true,
+  support_sigmas: 3.0, warmup_episodes: 20, metric: graph, lambda_init: 0.0}
 checkpoint: {checkpoint_dir: checkpoint/wdro, save_interval: 100, save_best: true, keep_last: 5}
-logging: {log_dir: logs/wdro, log_interval: 10, use_tensorboard: true, use_wandb: false, wandb_project: ev-fleet-rl}
+logging: {log_dir: logs/wdro, log_interval: 1, use_tensorboard: true, use_wandb: false, wandb_project: ev-fleet-rl}
 debug: {seed: 42}

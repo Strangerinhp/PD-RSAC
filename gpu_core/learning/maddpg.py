@@ -7,8 +7,9 @@ learning rule:
   actor's logits (the MADDPG treatment of discrete actions), the power is (1 + tanh mu) / 2 with
   Gaussian exploration noise in u-space while collecting; evaluation uses the joint mode and mu;
 - one critic Q(o_i, a_i, m_i, g) on the executed action (local population critic; the
-  'centralised' information is m_i and g), target y = R + (1 - done) gamma Qbar(s', Pi-hat(mu_bar(s')))
-  with the target actor and target critic, fixed gamma (Q12);
+  'centralised' information is m_i and g), target y = R + (1 - done) d Qbar(s', Pi-hat(mu_bar(s')))
+  with the target actor and target critic; d = gamma^Delta with ``agent.semi_mdp`` (the presets),
+  else gamma per decision;
 - actor loss -Q(s, Pi-hat(mu(s))) through Pi-hat with straight-through gradients, no entropy;
 - Polyak tau = training.tau (0.005) for the encoder, critic and actor (Q11).
 """

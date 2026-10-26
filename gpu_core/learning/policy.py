@@ -97,22 +97,21 @@ def codes(mode, slot, opt):
 
 
 def project_hat(s: Sample, inp, ctx, p_max_kw):
-    """Pi-hat with straight-through gradients. Returns (code, slot, opt, power, order)."""
+    """Pi-hat with straight-through gradients. Returns (code, slot, opt, charge share, order).
+    The continuous action of a charge is the share of the free battery capacity to add in the
+    session (round 6); it is executed as intended, so it passes through unchanged."""
     code = codes(s.mode, s.slot, s.opt)
-    lo = (s.opt * inp["opt_lo"]).sum(1)
-    ub = (s.opt * inp["opt_ub"]).sum(1)
-    p_kw = s.p * p_max_kw
-    p_hat = torch.minimum(torch.maximum(p_kw, lo), ub) / p_max_kw
-    power = s.p + (p_hat - s.p).detach()
     order = ctx.order * ctx.serve_ok[:, None].float()
-    return code, s.slot, s.opt, power, order
+    return code, s.slot, s.opt, s.p, order
 
 
-def fallback_action(s: Sample, inp, ctx, p_max_kw):
-    """What a SERVE intention executes when no order is left: the no-op (stay, or keep charging)."""
+def fallback_action(s: Sample, inp, ctx, p_max_kw, projected: bool = False):
+    """What a SERVE intention executes when no order is left. Raw executor: the no-op (stay, or
+    keep charging). MILP projection: stay for every vehicle, a charger included (round 5: the
+    L1 term then prefers staying to continuing, which also pays electricity)."""
     B = s.mode.shape[0]
     dev = s.mode.device
-    chg = ctx.charging.float()[:, None]
+    chg = ctx.charging.float()[:, None] * (0.0 if projected else 1.0)
     code = torch.zeros(B, N_CODES, device=dev)
     code[:, 2] = 1.0 - chg[:, 0]
     code[:, 4] = chg[:, 0]

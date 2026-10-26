@@ -51,6 +51,7 @@ class EpisodeReport:
     projection: Dict = field(default_factory=dict)
     seconds: float = 0.0
     discarded_reward: float = 0.0          # rewards of transitions still open at the end (dropped)
+    mean_delta: float = 0.0                # epochs per closed transition (sojourn length, training only)
     timing: Dict[str, float] = field(default_factory=dict)   # mean ms per epoch by stage, max epoch (F6)
 
 
@@ -78,7 +79,7 @@ def run_episode(env, agent, *, replay: Optional[ReplayBuffer] = None, projection
     if replay is not None:
         replay.new_episode()
     rng = rng or np.random.default_rng(seed)
-    gen = torch.Generator(device="cpu")
+    gen = torch.Generator(device=dev)          # samples are drawn on the networks' device
     gen.manual_seed(int(rng.integers(2**31)))
     rep = EpisodeReport()
     int_counts, exe_counts = np.zeros(3), np.zeros(N_CODES)
@@ -86,6 +87,7 @@ def run_episode(env, agent, *, replay: Optional[ReplayBuffer] = None, projection
     upd: List[Dict[str, float]] = []
     proj_row0 = len(projection.log.rows) if projection is not None else 0
     t, done = 0, False
+    delta_sum, delta_n = 0, 0
     clock = {"policy": 0.0, "projection": 0.0, "env": 0.0, "learn": 0.0}
     max_epoch, total_epoch = 0.0, 0.0
     while not done:
@@ -98,6 +100,7 @@ def run_episode(env, agent, *, replay: Optional[ReplayBuffer] = None, projection
             closed = tracker.close(dec_np, t, ctx_rows(ctx, "n_"), done=False)
             if closed:
                 replay.add_transitions(closed)
+                delta_sum, delta_n = delta_sum + int(closed["delta"].sum()), delta_n + len(closed["delta"])
         warm = warmup_steps > 0 and t < warmup_steps
         inp = agent.inputs(snap, ctx)
         out = None
@@ -167,7 +170,7 @@ def run_episode(env, agent, *, replay: Optional[ReplayBuffer] = None, projection
                 raise RuntimeError("executed station is not a candidate of the vehicle's cell")
             opt[chg] = hit.argmax(1)
         opt[code == CONT_C] = CONTINUE
-        power = (ex.power_kw[dec].cpu().numpy() / env.physics.p_max_kw).astype(np.float32)
+        power = ex.charge_frac[dec].cpu().numpy().astype(np.float32)     # share of the free capacity (charge)
         order = np.zeros((len(dec_np), 3), np.float32)
         srv = code == SERVE_C
         if srv.any():
@@ -235,6 +238,7 @@ def run_episode(env, agent, *, replay: Optional[ReplayBuffer] = None, projection
     rep.intention_share = {n: float(c / max(n_dec, 1)) for n, c in zip(names, int_counts)}
     rep.executed_share = {n: float(c / max(n_dec, 1)) for n, c in zip(("serve", "reposition", "stay", "charge", "continue"), exe_counts)}
     rep.pi_hat_match = match / max(n_dec, 1)
+    rep.mean_delta = delta_sum / max(delta_n, 1)
     rep.serve_available_share = serve_av / max(n_dec, 1)
     rep.serve_when_available = serve_pick / max(serve_av, 1)
     rep.low_energy_idle_share = low_idle / max(low_n, 1)

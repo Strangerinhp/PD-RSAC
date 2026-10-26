@@ -4,21 +4,35 @@ Decision variables, for every vehicle i that decides at this epoch (shared candi
 
 - x_io  serve order o whose pickup lies in i's 1-ring and keeps E >= E_min (Eq. 16);
 - y_ig  reposition to the actor's target g (if energy-feasible) or stay where i is (D2, D7);
-- z_is  book a free port at one of the 5 nearest stations reachable with E >= 0, power p_is;
-- c_i   (vehicles already CHARGING) continue charging at the held port, power q_i (D12).
+- z_is  book a free port at one of the 5 nearest stations reachable with E >= 0, for a charging
+        session that adds the intended share of the free battery capacity (round 6).
 
-    max  sum R(o) x_io - c_drv * km - p_elec * dt * (p + q) - mu * ||v - a~||_1          (12)
+    max  sum R(o) x_io - c_drv * km - mu * ||v - a~||_1                                     (12)
     s.t. one action per vehicle; each order at most once                                    (13)
-         new bookings + continuing chargers <= ports - ports held by non-deciding vehicles  (14, D3)
-         sum q_i <= P_feed - power of vehicles committed to charge this epoch               (14, D3, D12)
-         p_min z <= p <= min(P_max, battery headroom) z (same for q)                         (14, 15, 16)
+         new bookings <= ports - ports held (travelling or in a session)                    (14, D3)
+
+Charging sessions (round 6): a booked vehicle drives to the station and charges until it has
+added its share of the free capacity, busy the whole time. Bookings draw no power in the epoch
+they are made, so the power of the vehicles already in a session is separable from the binary
+decisions: each epoch it is the LP  max sum (mu / P_max - p_elec dt) q  s.t.  sum q <= P_feed,
+0 <= q <= min(P_max, battery headroom), whose optimum fills the feeder; ties are broken by
+lowest energy first (water-filling), in closed form. The feeder therefore holds at every epoch
+(Eq. 14) and a curtailed session simply lasts longer.
 
 Energy bounds (Eq. 16) are enforced by only creating variables that satisfy them: every action
 is the vehicle's only action, so its post-action energy is known when the variable is created.
-New bookings draw power only after the drive, so the feeder row covers the vehicles charging
-during this epoch (D12). The L1 term compares one-hot mode / target / station choices with
-the intention (mode probabilities, target, station) and the power as a fraction of P_max; it is
-linearised with an auxiliary variable per power variable, so the model is a pure MILP (D1).
+The L1 term is the full distance between the executed action and the intention as vectors
+(mode one-hot | reposition target one-hot | station one-hot | power), the intention being
+(p_serve, p_repos, p_charge | p_repos e_g | p_charge e_s | p~) (round 5):
+
+    serve        2 (1 - p_s) + p_r + p_c
+    repos to g   2 (1 - p_r) + (1 - p_r) + p_c            stay (own cell h)  ... + (1 + p_r if g != h)
+    charge at s  2 (1 - p_c) + p_r + (1 - p_c if s == s~ else 1 + p_c)      (booking or continuing)
+
+So a charge intention whose station is taken is re-routed to another free station (distance 2)
+rather than parked (3), and a SERVE intention without an order stays (3, no cost) instead of
+driving to the sampled slot. The charge share of a booking is the intention's (clipped to
+[0, 1]); the model is a pure MILP (D1).
 
 The solver runs under ``tau_max`` seconds, warm-started from Algorithm 1 (D8). Each call
 records one outcome code (D11): OPTIMAL, TL_IMPROVED, TL_WARMSTART_ONLY, FALLBACK_NO_INCUMBENT,
@@ -45,6 +59,8 @@ except ImportError:  # pragma: no cover - checked when the projection is built
 
 SERVE, REPOS, STAY, CHARGE, CONTINUE = range(5)
 CODES = ("OPTIMAL", "TL_IMPROVED", "TL_WARMSTART_ONLY", "FALLBACK_NO_INCUMBENT", "FALLBACK_ERROR", "EMPTY")
+# calls whose executed action is Algorithm 1's (D11 "effective fallback")
+FALLBACK_CODES = ("TL_WARMSTART_ONLY", "FALLBACK_NO_INCUMBENT", "FALLBACK_ERROR")
 
 
 @dataclass
@@ -52,7 +68,7 @@ class Intention:
     """Per-vehicle intention a~ ([V] tensors; rows of vehicles that do not decide are ignored)."""
     mode_probs: torch.Tensor                 # [V, 3] P(serve), P(charge), P(reposition)
     repos_target: torch.Tensor               # [V] target cell (own cell = stay)
-    power_frac: torch.Tensor                 # [V] preferred power / P_max
+    power_frac: torch.Tensor                 # [V] share of the free battery capacity to add when charging
     station: Optional[torch.Tensor] = None   # [V] preferred station, -1 = none
 
 
@@ -63,12 +79,15 @@ class ProjectedAction:
     trip: torch.Tensor          # trip slot for serve, else -1
     target: torch.Tensor        # reposition target / own cell for stay / station cell
     station: torch.Tensor       # booked or continued station, else -1
-    power_frac: torch.Tensor    # p / P_max for charge
+    power_frac: torch.Tensor    # share of the free capacity a booking adds
     code: str
     stats: Dict = field(default_factory=dict)
 
+    session_power: Optional[torch.Tensor] = None   # kW this epoch for vehicles in a charging session
+
     def step_kwargs(self) -> Dict:
-        return dict(vehicle_charge_power=self.power_frac, milp_serve_trip_ids=self.trip, charge_station=self.station)
+        return dict(vehicle_charge_power=self.power_frac, milp_serve_trip_ids=self.trip, charge_station=self.station,
+                    session_power_kw=self.session_power)
 
 
 @dataclass
@@ -111,8 +130,8 @@ class ProjectionLog:
         n = len(rows)
         counts = {c: sum(r["code"] == c for r in rows) for c in CODES}
         out = {"calls": n, **{f"n_{c}": counts[c] for c in CODES}}
-        out["effective_fallback_rate"] = ((counts["TL_WARMSTART_ONLY"] + counts["FALLBACK_NO_INCUMBENT"]
-                                           + counts["FALLBACK_ERROR"]) / n) if n else 0.0
+        out["n_fallback"] = sum(counts[c] for c in FALLBACK_CODES)
+        out["effective_fallback_rate"] = out["n_fallback"] / n if n else 0.0
         solved = [r for r in rows if r["code"] != "EMPTY"]
         for key in ("t_build", "t_model", "t_solve", "t_total", "n_vehicles", "n_binary", "mode_changed",
                     "target_changed", "station_changed", "power_dev"):
@@ -194,17 +213,19 @@ class MILPProjection:
         # serve
         vi, oi, km = self.cand.serve_pairs(cells, energy, pick, tkm)
         immediate = fare[oi] - self.c_drv * km
-        for a, b_, c, w in zip(vi, oi, immediate - mu * 2.0 * (1.0 - probs[vi, 0]), immediate):
+        l1_serve = 2.0 * (1.0 - probs[vi, 0]) + probs[vi, 2] + probs[vi, 1]
+        for a, b_, c, w in zip(vi, oi, immediate - mu * l1_serve, immediate):
             add(int(a), SERVE, int(b_), float(c), float(w), -1)
         # reposition to the intended target, and stay
         for i in range(len(dec)):
             g, h = int(g_hat[i]), int(cells[i])
-            pr = probs[i, 2]
+            pr, pc_i = probs[i, 2], probs[i, 1]
             if 0 <= g < H and g != h:
                 d = self.dist[h, g]
                 if energy[i] - ph.energy_per_km * d >= ph.reserve_kwh - EPS:
-                    add(i, REPOS, g, -self.c_drv * d - mu * 2.0 * (1.0 - pr), -self.c_drv * d, -1)
-            add(i, STAY, h, -mu * (2.0 * (1.0 - pr) + (2.0 if g != h else 0.0)), 0.0, -1)
+                    add(i, REPOS, g, -self.c_drv * d - mu * (3.0 * (1.0 - pr) + pc_i), -self.c_drv * d, -1)
+            stay_target = (1.0 - pr) if g == h else (1.0 + pr)
+            add(i, STAY, h, -mu * (2.0 * (1.0 - pr) + stay_target + pc_i), 0.0, -1)
         # free ports for this epoch: ports minus those held by vehicles that do not decide
         holders = fleet.holds_port_mask() & ~avail
         held = torch.bincount(fleet.charging_station[holders], minlength=self.num_stations).cpu().numpy()
@@ -212,13 +233,13 @@ class MILPProjection:
         # charging: continue at the held port, or book one of the nearest stations
         stations = self.cand.station_candidates(cells)
         for i in range(len(dec)):
-            pc = probs[i, 1]
+            pc, pr_i = probs[i, 1], probs[i, 2]
             charging = status[i] == VehicleStatus.CHARGING
             if charging:
                 ub = float(ph.max_power(torch.tensor(energy[i])))
                 if ub >= ph.p_min_kw - 1e-9:
                     s = int(own[i])
-                    pen = 2.0 * (1.0 - pc) + (2.0 if 0 <= s_hat[i] != s else 0.0)
+                    pen = 2.0 * (1.0 - pc) + pr_i + ((1.0 - pc) if s_hat[i] == s else (1.0 + pc))
                     add(i, CONTINUE, s, -mu * pen, 0.0, s)
                     p_bin.append(len(veh) - 1); p_ub.append(ub); p_feed.append(True)
             for s in stations[i]:
@@ -234,20 +255,37 @@ class MILPProjection:
                 ub = float(ph.max_power(torch.tensor(max(e_arr, 0.0))))
                 if ub < ph.p_min_kw - 1e-9:
                     continue
-                pen = 2.0 * (1.0 - pc) + (2.0 if 0 <= s_hat[i] != s else 0.0)
+                pen = 2.0 * (1.0 - pc) + pr_i + ((1.0 - pc) if s_hat[i] == s else (1.0 + pc))
                 add(i, CHARGE, s, -self.c_drv * d - mu * pen, -d, s)
-                p_bin.append(len(veh) - 1); p_ub.append(ub); p_feed.append(False)
-        # feeder: vehicles committed to charge this epoch but not deciding (arrivals, D3)
-        committed = (fleet.status == VehicleStatus.CHARGING) & (fleet.busy_until >= 0) & ~avail
-        fixed = float(torch.minimum(fleet.charge_power[committed], ph.max_power(fleet.socs[committed])).sum()) \
-            if committed.any() else 0.0
+        # feeder: what the vehicles in a session draw this epoch (allocated first, in closed form)
+        sess_load = float(self.session_power().sum())
         return _Problem(
             dec=dec, cells=cells, energy=energy, probs=probs, g_hat=g_hat, s_hat=s_hat, p_tilde=p_tilde,
             slots=open_slots, b_veh=np.array(veh, dtype=np.int64), b_kind=np.array(kind, dtype=np.int64),
             b_ref=np.array(ref, dtype=np.int64), b_coef=np.array(coef), b_reward=np.array(rew),
             b_station=np.array(st, dtype=np.int64), p_bin=np.array(p_bin, dtype=np.int64),
             p_ub=np.array(p_ub), p_feeder=np.array(p_feed, dtype=bool), cap=cap,
-            feeder_rhs=max(0.0, ph.feeder_kw - fixed))
+            feeder_rhs=max(0.0, ph.feeder_kw - sess_load))
+
+    # ------------------------------------------------------------------ charging sessions
+    def session_power(self) -> torch.Tensor:
+        """[V] kW this epoch for the vehicles in a charging session: water-filling under the feeder,
+        lowest energy first, each capped at min(P_max, battery headroom) (closed-form LP optimum)."""
+        fleet, ph = self.env.fleet_state, self.ph
+        k = int(self.env.current_step)
+        sess = ((fleet.status == VehicleStatus.CHARGING) & (fleet.busy_until == k + 1)).cpu()
+        out = torch.zeros(fleet.num_vehicles)
+        if not sess.any():
+            return out
+        idx = sess.nonzero(as_tuple=True)[0]
+        e = fleet.socs.cpu()[idx]
+        ub = ph.max_power(e)
+        room = float(ph.feeder_kw)
+        for j in torch.argsort(e, stable=True).tolist():
+            q = min(float(ub[j]), room)
+            out[idx[j]] = q
+            room -= q
+        return out
 
     # ------------------------------------------------------------------ Algorithm 1
     def _fallback(self, P: _Problem):
@@ -284,11 +322,12 @@ class MILPProjection:
                 new = [b for b in bs if P.b_kind[b] == CHARGE and cap[P.b_station[b]] >= 1]
                 if new:
                     b = max(new, key=lambda b: (P.b_reward[b], -P.b_station[b]))     # nearest station
-                    pick = (b, P.p_ub[pvar[b]])
+                    pick = (b, None)
             if pick is not None:
                 b, p = pick
                 chosen[i] = b
-                power[pvar[b]] = p
+                if p is not None:
+                    power[pvar[b]] = p
                 cap[P.b_station[b]] -= 1
                 continue
             rep = [b for b in bs if P.b_kind[b] == REPOS]
@@ -374,10 +413,13 @@ class MILPProjection:
         stats = {"step": self.env.current_step, "n_vehicles": len(P.dec), "n_orders": len(P.slots),
                  "n_binary": len(P.b_veh), "n_continuous": 2 * len(P.p_bin), "mip_gap": None,
                  "obj": None, "ws_obj": None, "t_build": 0.0, "t_model": 0.0, "t_solve": 0.0}
+        sess = self.session_power()
+        stats["session_kw"] = float(sess.sum())
         if len(P.dec) == 0:
             stats.update(code="EMPTY", t_total=time.perf_counter() - t0)
             self.log.add(stats)
-            return ProjectedAction(mode.to(dev), trip.to(dev), target.to(dev), station.to(dev), power.to(dev), "EMPTY", stats)
+            return ProjectedAction(mode.to(dev), trip.to(dev), target.to(dev), station.to(dev), power.to(dev), "EMPTY", stats,
+                                   session_power=sess.to(dev))
 
         ws_chosen, ws_power = self._fallback(P)
         ws_obj = self._objective(P, ws_chosen, ws_power)
@@ -400,7 +442,11 @@ class MILPProjection:
         except gp.GurobiError as exc:
             if "size-limited license" in str(exc):
                 # A restricted license would silently turn every call into Algorithm 1: fail closed.
-                raise RuntimeError(f"Gurobi license is size-limited ({exc}); set GRB_LICENSE_FILE to the full license") from exc
+                import os
+                lic = os.environ.get("GRB_LICENSE_FILE")
+                where = f"GRB_LICENSE_FILE={lic!r}" if lic else "GRB_LICENSE_FILE is not set in this shell"
+                raise RuntimeError(f"Gurobi is running on the size-limited pip license ({exc}); {where}. "
+                                   f"Export GRB_LICENSE_FILE=<path to the full gurobi.lic> before starting the run") from exc
             code, chosen, pw = "FALLBACK_ERROR", ws_chosen, ws_power
             stats["error"] = str(exc)
         if code.startswith("FALLBACK"):
@@ -421,8 +467,10 @@ class MILPProjection:
         chg = np.isin(kinds, (CHARGE, CONTINUE))
         station[dec[chg]] = torch.from_numpy(refs[chg])
         target[dec[chg]] = torch.from_numpy(self.station_cells[refs[chg]])
-        pw_v = np.array([pw[pk[int(b)]] for b in chosen[chg]]) if chg.any() else np.zeros(0)
-        power[dec[chg]] = torch.from_numpy(pw_v / self.ph.p_max_kw).float()
+        # booking: the intended share of the free capacity; continuing (unused with sessions): its power
+        pw_v = np.array([P.p_tilde[i] if P.b_kind[b] == CHARGE else pw[pk[int(b)]] / self.ph.p_max_kw
+                         for i, b in zip(np.nonzero(chg)[0], chosen[chg])]) if chg.any() else np.zeros(0)
+        power[dec[chg]] = torch.from_numpy(np.clip(pw_v, 0.0, 1.0)).float()
 
         # how far the projection moved from the intention (D11)
         intended = P.probs.argmax(axis=1)
@@ -431,10 +479,11 @@ class MILPProjection:
         stats["target_changed"] = float((refs[want_rep] != P.g_hat[want_rep]).mean()) if want_rep.any() else 0.0
         want_st = chg & (P.s_hat >= 0)
         stats["station_changed"] = float((refs[want_st] != P.s_hat[want_st]).mean()) if want_st.any() else 0.0
-        stats["power_dev"] = float(np.abs(pw_v / self.ph.p_max_kw - P.p_tilde[chg]).mean()) if chg.any() else 0.0
+        stats["power_dev"] = float(np.abs(pw_v - P.p_tilde[chg]).mean()) if chg.any() else 0.0
         stats["t_total"] = time.perf_counter() - t0
         self.log.add(stats)
-        return ProjectedAction(mode.to(dev), trip.to(dev), target.to(dev), station.to(dev), power.to(dev), code, stats)
+        return ProjectedAction(mode.to(dev), trip.to(dev), target.to(dev), station.to(dev), power.to(dev), code, stats,
+                               session_power=sess.to(dev))
 
 
 def make_projection(env) -> MILPProjection:

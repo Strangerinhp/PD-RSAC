@@ -17,7 +17,7 @@ import os
 import time
 from dataclasses import asdict
 
-from ..data.factory import build_run, split_hours
+from ..data.factory import SIM_DEVICE, build_run, split_hours
 from ..utils.console import RateMeter, fmt_duration, rule
 from .factory import NAMES, make_agent
 from .trainer import Trainer
@@ -110,7 +110,7 @@ def _episode_line(ep, total, rep, agent, wall, eta):
     if "alpha_mode" in u:
         learn.append(f"alpha {u['alpha_mode']:.4f}")
     if "wdro_lambda" in u:
-        learn.append(f"lambda {u['wdro_lambda']:.3f} rho^ {u['wdro_rho_hat']:.3f}")
+        learn.append(f"lambda {u['wdro_lambda']:.3f} rho^ {u['wdro_rho_hat']:.3f} gap {u.get('wdro_gap', 0):+.4f}")
     if "loss_v" in u and agent.algo == "mappo":
         learn.append(f"V-loss {u['loss_v']:.4f} KL {u.get('approx_kl', 0):.4f} H {u.get('entropy', 0):.2f}")
     if not u:
@@ -118,7 +118,7 @@ def _episode_line(ep, total, rep, agent, wall, eta):
     line = (f"[ep {ep:>4}/{total} {ep / total:5.1%}] profit ${rep.profit:>9,.0f}  service {service:6.1%} "
             f"({rep.served:,}/{rep.loaded:,}, dropped {rep.dropped:,}) | intent S/R/C {i.get('serve', 0):.2f}/"
             f"{i.get('reposition', 0):.2f}/{i.get('charge', 0):.2f} | battery end {rep.mean_energy_end:.0%}, stuck "
-            f"{rep.stuck_vehicles_end} | {' '.join(x for x in learn if x)}")
+            f"{rep.stuck_vehicles_end}, Delta {rep.mean_delta:.1f} | {' '.join(x for x in learn if x)}")
     if rep.projection:
         p = rep.projection
         line += f" | MILP {p['mean_t_total']:.2f} s, fallback {p['effective_fallback_rate']:.1%}"
@@ -138,7 +138,7 @@ def train_vehicle_sac(args, config, device, env, train_data, manifest, run_recor
     if not args.synthetic:
         vcfg = copy.deepcopy(config)
         vcfg.episode.duration_hours = split_hours(config, args.eval_split)
-        val = build_run(vcfg, device, split=args.eval_split, manifest=manifest, verbose=False)
+        val = build_run(vcfg, SIM_DEVICE, split=args.eval_split, manifest=manifest, verbose=False)
         val_env, val_projection = val.env, val.projection
     ckpt_dir = config.checkpoint.checkpoint_dir
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -200,7 +200,9 @@ def train_vehicle_sac(args, config, device, env, train_data, manifest, run_recor
             info = val_env.episode_info
             print(f"  [val {args.eval_split}] profit ${ev.profit:,.0f}  service {ev.served / max(ev.loaded, 1):.1%} "
                   f"({ev.served:,}/{ev.loaded:,}) | feeder peak {info.feeder_peak_kw:,.0f} kW, violations "
-                  f"{info.feeder_violation_steps} | {fmt_duration(dt)} | "
+                  f"{info.feeder_violation_steps}"
+                  + (f" | MILP fallback {ev.projection.get('n_fallback', 0)}/{ev.projection.get('calls', 0)}" if ev.projection else "")
+                  + f" | {fmt_duration(dt)} | "
                   f"{'new best -> best.pt' if better else 'best $%s' % format(trainer.best_val, ',.0f')}", flush=True)
             if writer is not None:
                 writer.add_scalar("eval/profit", ev.profit, ep)

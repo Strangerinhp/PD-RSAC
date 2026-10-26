@@ -33,8 +33,10 @@ def _default_splits() -> Dict[str, List[str]]:
         "train": ["2009-01-02", "2009-01-22"],
         "val": ["2009-01-22", "2009-01-25"],
         "test": ["2009-01-25", "2009-02-01"],
-        "xmas": ["2009-12-25", "2009-12-26"],
-        "ctrl": ["2009-12-18", "2009-12-19"],
+        # OOD test (round 11): New Year's Eve 2009 (Thursday). Volume of a January Thursday (0.98x,
+        # ~54k orders at 12 %) with the pickup distribution shifted in all 17 active hours; in the
+        # evening Times Square is closed and demand moves to the party districts.
+        "nye": ["2009-12-31", "2010-01-01"],
     }
 
 
@@ -43,9 +45,10 @@ class DataConfig:
     # Relative paths are resolved against the repository root.
     processed_root: str = "../data/processed"
     datasets: List[str] = field(default_factory=lambda: ["yellow_tripdata_2009-01", "yellow_tripdata_2009-12"])
-    manifest_path: str = "../data/manifests/nyc_r7_v1.json"
+    manifest_path: str = "../data/manifests/nyc_r7_v3.json"
     h3_resolution: int = 7
-    sample_ratio: float = 0.1      # per-trip deterministic sample, applied after the domain is fixed
+    sample_ratio: float = 0.12     # per-trip deterministic sample, applied after the domain is fixed (round 9: 12 %;
+                                   # paper and rounds 5-8: 20 %, where 1000 vehicles served only ~46 % of the orders)
     sample_seed: int = 2009
     splits: Dict[str, List[str]] = field(default_factory=_default_splits)
 
@@ -64,7 +67,7 @@ class TrainingConfig:
     total_episodes: int = 5000
     batch_size: int = 256          # per-vehicle transitions per minibatch
     learning_rate: LearningRateConfig = field(default_factory=LearningRateConfig)
-    gamma: float = 0.99
+    gamma: float = 0.999           # per step (semi-MDP) or per decision; one value for every family
     tau: float = 0.005             # Polyak averaging of target networks (Q11)
     warmup_steps: int = 10000      # decision epochs of uniform intentions before learning (off-policy)
     mixed_precision: bool = True
@@ -120,7 +123,8 @@ class StationConfig:
     num_ports: int = 5
     max_power: float = 50.0                # P_max^s per port, kW
     min_power: float = 20.0                # p_min when charging under the projection, kW
-    feeder_kw: float = 7000.0              # P_feed: measured, never enforced by the simulator (Q9)
+    feeder_kw: float = 5000.0              # P_feed: enforced by the MILP projection, measured on the raw path (Q9);
+                                           # 5000 kW binds ~10-25 % of the time at the 12 % sample (7000 kW: < 1 %)
     # Placement is done once by the manifest builder (cover-then-fill, Q13b); these
     # values are recorded here so the run config states what the manifest must contain.
     cover_rings: int = 2
@@ -167,16 +171,19 @@ class AgentConfig:
 @dataclass
 class WDROConfig:
     enabled: bool = True
-    rho: float = 0.3
-    rho_target: float = 0.2
+    rho: float = 0.1                 # budget in the robust target (21); = rho_target (round 7); 0.1 with the metric step (round 8)
+    rho_target: float = 0.1
     beta: float = 0.3
-    eta0: float = 0.01
+    eta0: float = 0.5                # dual step eta0 / sqrt(t), t = dual updates (round 7)
     inner_steps: int = 5
-    step_size: float = 0.5             # in standard deviations of each coordinate
+    step_size: float = 0.5             # 'sigma' rule only: step in standard deviations of each coordinate
+    step_rule: str = "metric"          # 'metric' (round 8): p = S^-1 grad f, length step_size_d in d_Q; 'sigma': rounds <= 7
+    step_size_d: float = 0.05          # 'metric' rule: length of each inner step in d_Q units (= rho / 2)
+    schur: bool = True                 # 2-hop restriction by the Schur complement (round 8); False = plain block Q_ii
     support_sigmas: float = 3.0        # box support B around xi-hat
     warmup_episodes: int = 20          # non-robust episodes before the robust target (Q7)
     metric: str = "graph"              # graph | diag | identity
-    lambda_init: float = 1.0
+    lambda_init: float = 0.0          # dual variable starts at 0 and rises only while the realised radius exceeds rho_target
 
 
 @dataclass

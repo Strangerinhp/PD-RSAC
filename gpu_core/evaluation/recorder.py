@@ -9,7 +9,9 @@ epoch's wall-clock time and the step increments of the economic counters, and ac
 - stations: ports held per station each epoch (bookings in travel + charging), mean utilisation
   and the share of epochs each station is full;
 - bookings: new charging bookings intended by deciders and how many were not granted (no free
-  port on the raw path, or changed by the projection); chargers that continue are not requests.
+  port on the raw path, or changed by the projection); chargers that continue are not requests;
+- projection (with the MILP): the outcome code of each epoch's call and whether the executed
+  action came from Algorithm 1 (``fallback``: warm start only, no incumbent or solver error).
 
 Rows are grouped by calendar day for the weekly table (F7).
 """
@@ -21,6 +23,8 @@ import numpy as np
 import torch
 
 from ..simulator.executor import CHARGE, EXEC_CHARGE, EXEC_CONTINUE
+from ..simulator.environment import FEEDER_TOL_KW
+from ..simulator.projection import FALLBACK_CODES
 
 _COUNTERS = ("revenue", "driving_cost", "energy_cost", "wait_penalty", "drop_penalty", "trips_served",
              "trips_completed", "trips_dropped", "trips_loaded", "energy_charged_kwh", "energy_bought_kwh",
@@ -37,8 +41,9 @@ def _hhmm(epoch_s: int) -> str:
 
 class StepRecorder:
 
-    def __init__(self, env, tight_fraction: float = 0.98, label: str = ""):
+    def __init__(self, env, tight_fraction: float = 0.98, label: str = "", projection=None):
         self.env = env
+        self.projection = projection
         self.label = label
         self.tight_fraction = float(tight_fraction)
         self.feeder_kw = float(env.physics.feeder_kw)
@@ -53,6 +58,8 @@ class StepRecorder:
         self._full_epochs = np.zeros(self.num_stations)
         self._requests = 0
         self._denied = 0
+        proj = getattr(self, "projection", None)
+        self._proj_seen = len(proj.log.rows) if proj is not None else 0
 
     # ------------------------------------------------------------------ per epoch
     def on_step(self, t: int, info, intent: Optional[torch.Tensor] = None) -> None:
@@ -68,7 +75,7 @@ class StepRecorder:
         load = float(info.feeder_load_kw)
         row["feeder_load_kw"] = load
         row["vehicles_charging"] = int(info.vehicles_charging_now)
-        row["feeder_violation"] = int(load > self.feeder_kw + 1e-6)
+        row["feeder_violation"] = int(load > self.feeder_kw + FEEDER_TOL_KW)
         row["feeder_tight"] = int(load >= self.tight_fraction * self.feeder_kw)
 
         fleet = env.fleet_state
@@ -89,6 +96,13 @@ class StepRecorder:
         self._requests += req
         self._denied += den
         row["charge_requests"], row["charge_denied"] = req, den
+        row["proj_code"], row["fallback"] = "", 0
+        if self.projection is not None:
+            new = self.projection.log.rows[self._proj_seen:]
+            self._proj_seen = len(self.projection.log.rows)
+            if new:
+                row["proj_code"] = new[-1]["code"]
+                row["fallback"] = int(any(r["code"] in FALLBACK_CODES for r in new))
         self.rows.append(row)
 
     # ------------------------------------------------------------------ summaries
@@ -123,6 +137,7 @@ class StepRecorder:
             "charge_requests": int(self._requests),
             "charge_denied": int(self._denied),
             "charge_denied_rate": self._denied / max(self._requests, 1),
+            "fallback_steps": int(sum(r.get("fallback", 0) for r in self.rows)),
         }
 
     def day_table(self) -> List[Dict]:
@@ -147,5 +162,6 @@ class StepRecorder:
                 "feeder_tight_share": float(np.mean([r["feeder_tight"] for r in rows])),
                 "charge_requests": int(sum(r["charge_requests"] for r in rows)),
                 "charge_denied": int(sum(r["charge_denied"] for r in rows)),
+                "fallback_steps": int(sum(r.get("fallback", 0) for r in rows)),
             })
         return out

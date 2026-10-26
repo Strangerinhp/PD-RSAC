@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
 Test protocol (workstream F7): evaluate one checkpoint on the test week (25-31 Jan 2009, one
-continuous 2016-epoch episode with a per-day table), on 25 Dec 2009 (``xmas``, OOD) and on its
-control day 18 Dec 2009 (``ctrl``), each with the checkpoint's own pipeline, and report the
-effect ``xmas - ctrl``. A second mode joins several runs into one comparison table.
+continuous 2016-epoch episode with a per-day table), on two real OOD days with their controls -
+25 Dec 2009 (``xmas``) against 18 Dec (``ctrl``), and 1 Jan 2009 (``newyear``) against 29 Jan
+(``ny_ctrl``) - each with the checkpoint's own pipeline, and report the effects ``xmas - ctrl``
+and ``newyear - ny_ctrl``. ``--sample-ratio`` evaluates on another trip sample than the one the
+checkpoint was trained on (e.g. 0.15 or 0.12: fewer orders per vehicle). A second mode joins
+several runs into one comparison table.
 
     python gpu_core/scripts/run_protocol.py --checkpoint checkpoint/full/best.pt --label full --out-dir results/full
     python gpu_core/scripts/run_protocol.py --preset greedy --out-dir results/greedy        # heuristic, no checkpoint
+    python gpu_core/scripts/run_protocol.py --checkpoint checkpoint/full/best.pt --label full \
+        --sample-ratio 0.15 --splits test --out-dir results/full_s15                        # another trip sample
     python gpu_core/scripts/run_protocol.py --compare results/full results/sac results/no_milp --out results/table.csv
 
 Each run directory gets <split>.json, <split>_epochs.csv (feeder load, ports, economics per
@@ -42,6 +47,8 @@ def parse_args(argv=None):
     p.add_argument('--config', default=None, help='YAML instead of the config embedded in the checkpoint')
     p.add_argument('--manifest', default=None)
     p.add_argument('--processed-root', default=None)
+    p.add_argument('--sample-ratio', type=float, default=None,
+                   help='trip sample of the evaluation splits (default: the checkpoint\'s, 0.2)')
     p.add_argument('--milp', dest='milp', action='store_true', default=None, help='force the projection')
     p.add_argument('--no-milp', dest='milp', action='store_false', help='force the raw executor')
     p.add_argument('--max-steps', type=int, default=None, help='stop each split after N epochs (smoke tests)')

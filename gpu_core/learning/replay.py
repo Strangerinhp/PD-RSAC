@@ -202,8 +202,9 @@ class TransitionTracker:
         vehicles = vehicles[self.open[vehicles]]
         if len(vehicles) == 0:
             return {}
-        if not done and (self.k[vehicles] != self.delta[vehicles]).any():
-            bad = vehicles[self.k[vehicles] != self.delta[vehicles]]
+        known = self.delta[vehicles] > 0          # 0 = charging session, length known only at its end
+        if not done and (known & (self.k[vehicles] != self.delta[vehicles])).any():
+            bad = vehicles[known & (self.k[vehicles] != self.delta[vehicles])]
             raise RuntimeError(f"vehicle {bad[:5]} decided after {self.k[bad[:5]]} epochs, executed Delta was {self.delta[bad[:5]]}")
         rows = {k: v[vehicles].copy() for k, v in self.data.items()}
         rows["t_next"] = np.full(len(vehicles), t_next, np.int64)

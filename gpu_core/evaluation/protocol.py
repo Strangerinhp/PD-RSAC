@@ -1,12 +1,12 @@
 """Evaluation protocol (workstream F3, F5-F7).
 
 - one split = one continuous episode from its first epoch (test week 25-31 Jan: 2016 epochs;
-  ``xmas`` 25 Dec 2009 and ``ctrl`` 18 Dec 2009: 288 epochs), deterministic policy, fixed seed;
+  ``nye`` 31 Dec 2009: 288 epochs), deterministic policy, fixed seed;
 - the pipeline is the checkpoint's: its embedded config decides MILP or raw executor (F2, F39),
   through the shared ``build_run`` (F1);
 - every result carries the economic totals, service, feeder and station metrics (F5), the D11
   projection statistics, per-epoch timings (F6) and a per-day table;
-- the suite reports each split and the OOD effect ``xmas - ctrl`` per algorithm (F7).
+- the suite (round 11) is the test week and New Year's Eve 2009 (``nye``, the OOD day) (F7).
 """
 
 import copy
@@ -17,14 +17,12 @@ from typing import Dict, Iterable, List, Optional
 
 from .recorder import StepRecorder
 
-SUITE_SPLITS = ("test", "xmas", "ctrl")
+SUITE_SPLITS = ("test", "nye")
 TOTAL_KEYS = ("profit", "revenue", "driving_cost", "energy_cost", "wait_penalty", "drop_penalty",
               "trips_loaded", "trips_served", "trips_completed", "trips_dropped", "trips_out_of_domain",
               "service_rate", "infeasible_executed", "serve_unmatched", "charge_no_port")
 GRID_KEYS = ("feeder_peak_kw", "feeder_mean_kw", "feeder_violation_steps", "feeder_tight_share", "energy_charged_kwh",
              "port_utilisation_mean", "port_utilisation_max_station", "stations_full_share_mean", "charge_denied_rate")
-DELTA_KEYS = ("profit", "revenue", "driving_cost", "energy_cost", "trips_loaded", "trips_served", "trips_dropped",
-              "service_rate", "feeder_peak_kw", "feeder_violation_steps", "energy_charged_kwh")
 
 
 def episode_totals(env) -> Dict:
@@ -42,7 +40,7 @@ def evaluate_agent_on_split(run, agent, *, split: str, label: str = "", seed: in
     Returns (result dict, recorder with the per-epoch rows). ``progress`` prints every 10 %."""
     from ..learning.loop import run_episode
     from ..utils.console import EpisodeProgress
-    rec = StepRecorder(run.env, tight_fraction=tight_fraction, label=label)
+    rec = StepRecorder(run.env, tight_fraction=tight_fraction, label=label, projection=run.projection)
     hook = (EpisodeProgress(run.env, f"{label} | {split}", total=min(run.env.episode_steps, max_steps or 10**9),
                             inner=rec.on_step) if progress else rec.on_step)
     rep = run_episode(run.env, agent, projection=run.projection, seed=seed, deterministic=deterministic,
@@ -69,19 +67,6 @@ def result_record(run, rec: StepRecorder, *, split: str, label: str, seed: int, 
     }
 
 
-def ood_delta(results: Dict[str, Dict], a: str = "xmas", b: str = "ctrl") -> Dict:
-    """``a - b`` of the headline metrics (absolute and relative to ``b``)."""
-    if a not in results or b not in results:
-        return {}
-    out = {}
-    for k in DELTA_KEYS:
-        va = results[a][k] if k in results[a] else results[a]["grid"][k]
-        vb = results[b][k] if k in results[b] else results[b]["grid"][k]
-        out[k] = va - vb
-        out[f"{k}_rel"] = (va - vb) / abs(vb) if vb else None
-    return out
-
-
 def summary_row(res: Dict) -> Dict:
     """Flat row of one (algorithm, split) result for the comparison table."""
     row = {"label": res["label"], "split": res["split"], "milp": res["milp"], "steps": res["steps"]}
@@ -89,7 +74,8 @@ def summary_row(res: Dict) -> Dict:
     row.update({k: res["grid"][k] for k in GRID_KEYS})
     p = res.get("projection") or {}
     if p:
-        row.update({"proj_calls": p.get("calls"), "proj_effective_fallback": p.get("effective_fallback_rate"),
+        row.update({"proj_calls": p.get("calls"), "proj_fallback_calls": p.get("n_fallback"),
+                    "proj_effective_fallback": p.get("effective_fallback_rate"),
                     "proj_optimal": p.get("n_OPTIMAL"), "proj_tl_improved": p.get("n_TL_IMPROVED"),
                     "proj_tl_warmstart_only": p.get("n_TL_WARMSTART_ONLY"),
                     "proj_no_incumbent": p.get("n_FALLBACK_NO_INCUMBENT"), "proj_error": p.get("n_FALLBACK_ERROR"),
@@ -106,9 +92,10 @@ def compare_rows(summaries: Iterable[Dict]) -> List[Dict]:
     for s in summaries:
         for split, res in s["results"].items():
             rows.append(summary_row(res))
-        if s.get("ood_delta"):
-            rows.append({"label": s["label"], "split": "xmas-ctrl", **{k: v for k, v in s["ood_delta"].items()
-                                                                       if not k.endswith("_rel")}})
+        # summaries written before round 11 also carry OOD effects (e.g. xmas - ctrl)
+        deltas = s.get("ood_deltas") or ({"xmas-ctrl": s["ood_delta"]} if s.get("ood_delta") else {})
+        for name, d in deltas.items():
+            rows.append({"label": s["label"], "split": name, **{k: v for k, v in d.items() if not k.endswith("_rel")}})
     return rows
 
 
@@ -171,7 +158,7 @@ def run_suite(config, device, evaluate_fn, *, label: str, out_dir: str, splits: 
     the projection); ``evaluate_fn(run, split, cfg)`` returns (result, recorder). Writes
     ``<split>.json``, ``<split>_epochs.csv``, ``<split>_days.csv`` (+ ``<split>_projection.csv``),
     ``summary.json`` and ``summary.csv``."""
-    from ..data.factory import build_run, split_hours
+    from ..data.factory import SIM_DEVICE, build_run, split_hours
     from ..utils.console import fmt_duration, rule
     import time
     out = Path(out_dir)
@@ -183,13 +170,13 @@ def run_suite(config, device, evaluate_fn, *, label: str, out_dir: str, splits: 
         print(rule(f"protocol | {label}"))
         print(f"splits {', '.join(f'{s} {config.data.splits[s]}' for s in splits)} | "
               f"{config.environment.num_vehicles} vehicles | {'MILP projection' if config.milp.enabled else 'raw executor'} | "
-              f"seed {seed} | output {out}")
+              f"sample {config.data.sample_ratio:.0%} | seed {seed} | output {out}")
     for n, split in enumerate(splits, 1):
         if verbose:
             print(f"[{n}/{len(splits)}] {split}: building the environment ...", flush=True)
         cfg = copy.deepcopy(config)
         cfg.episode.duration_hours = split_hours(cfg, split)
-        run = build_run(cfg, device, split=split, verbose=False)
+        run = build_run(cfg, SIM_DEVICE, split=split, verbose=False)
         res, rec = evaluate_fn(run, split, cfg)
         results[split] = res
         with open(out / f"{split}.json", "w", encoding="utf-8") as f:
@@ -201,15 +188,11 @@ def run_suite(config, device, evaluate_fn, *, label: str, out_dir: str, splits: 
         if verbose:
             print_result(res)
     summary = {"label": label, "milp": bool(config.milp.enabled), "seed": seed,
-               "results": results, "ood_delta": ood_delta(results)}
+               "sample_ratio": float(config.data.sample_ratio), "results": results}
     with open(out / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, default=float)
     write_rows_csv(out / "summary.csv", compare_rows([summary]))
     if verbose:
-        d = summary["ood_delta"]
-        if d:
-            print(f"  [{label} | xmas - ctrl] profit {d['profit']:+,.0f} ({d['profit_rel']:+.1%}), service "
-                  f"{d['service_rate']:+.1%} points, orders {d['trips_loaded']:+,.0f}, feeder peak {d['feeder_peak_kw']:+,.0f} kW")
         print(f"[done] {label}: {len(splits)} splits in {fmt_duration(time.perf_counter() - t_suite)}; results in {out}")
     return summary
 
@@ -254,15 +237,17 @@ def print_result(r: Dict) -> None:
     print(f"    stations   ports used {g['port_utilisation_mean']:.1%} (busiest {g['port_utilisation_max_station']:.1%}), "
           f"full {g['stations_full_share_mean']:.1%} of the time; bookings denied {g['charge_denied']:,}/{g['charge_requests']:,}")
     if p:
-        print(f"    projection {p['calls']} calls, effective fallback {p['effective_fallback_rate']:.1%} (optimal "
-              f"{p['n_OPTIMAL']}, improved {p['n_TL_IMPROVED']}, warm-start only {p['n_TL_WARMSTART_ONLY']}, no incumbent "
-              f"{p['n_FALLBACK_NO_INCUMBENT']}, error {p['n_FALLBACK_ERROR']}); {p['mean_t_total']:.2f} s mean, "
-              f"{p['max_t_total']:.2f} s max")
+        n_fb = p.get("n_fallback", p["n_TL_WARMSTART_ONLY"] + p["n_FALLBACK_NO_INCUMBENT"] + p["n_FALLBACK_ERROR"])
+        print(f"    projection {p['calls']} calls; fallback (Algorithm 1) used {n_fb} times = "
+              f"{p['effective_fallback_rate']:.1%} (warm-start only {p['n_TL_WARMSTART_ONLY']}, no incumbent "
+              f"{p['n_FALLBACK_NO_INCUMBENT']}, error {p['n_FALLBACK_ERROR']}); optimal {p['n_OPTIMAL']}, improved "
+              f"{p['n_TL_IMPROVED']}; {p['mean_t_total']:.2f} s mean, {p['max_t_total']:.2f} s max")
     if t:
         print(f"    time       {t.get('epoch_ms', 0) / 1000:.2f} s/epoch (max {t.get('max_epoch_ms', 0) / 1000:.2f} s), "
               f"total {fmt_duration(r.get('seconds', 0))}")
     if len(r["days"]) > 1:
-        print("    per day    date        profit      service   served/orders   feeder peak  violations")
+        print("    per day    date        profit      service   served/orders   feeder peak  violations  fallback")
         for d in r["days"]:
             print(f"               {d['date']}  ${d['profit']:>10,.0f}   {d['service_rate']:6.1%}   "
-                  f"{d['trips_served']:>6,}/{d['trips_loaded']:<6,}  {d['feeder_peak_kw']:>8,.0f} kW  {d['feeder_violation_steps']:>5}")
+                  f"{d['trips_served']:>6,}/{d['trips_loaded']:<6,}  {d['feeder_peak_kw']:>8,.0f} kW  {d['feeder_violation_steps']:>5}"
+                  f"       {d.get('fallback_steps', 0):>5}")

@@ -4,13 +4,13 @@ Evaluate a vehicle-level SAC / PD-RSAC checkpoint on one data split (workstream 
 
 Usage:
     python evaluate.py --checkpoint checkpoints/full/best.pt --split test     # one episode = whole test week
-    python evaluate.py --checkpoint checkpoints/full/best.pt --split xmas     # 25 Dec 2009 (OOD)
+    python evaluate.py --checkpoint checkpoints/full/best.pt --split nye      # 31 Dec 2009 (OOD)
 
 The configuration is the one embedded in the checkpoint, including the projection: a checkpoint
 trained with the MILP is evaluated with it (``--milp`` / ``--no-milp`` override and are reported).
 The policy is deterministic unless --no-deterministic. Results carry the economic totals, feeder
 and station metrics, D11 projection statistics, per-epoch timings and a per-day table; the full
-protocol over test / xmas / ctrl is scripts/run_protocol.py. MAPPO / MADDPG checkpoints use
+protocol over test / nye is scripts/run_protocol.py. MAPPO / MADDPG checkpoints use
 evaluate_mappo.py / evaluate_maddpg.py until workstream G.
 """
 
@@ -23,7 +23,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from gpu_core.data.factory import add_data_args, apply_data_args, build_run, config_for_evaluation, split_hours  # noqa: E402
+from gpu_core.data.factory import SIM_DEVICE, add_data_args, apply_data_args, build_run, config_for_evaluation, split_hours  # noqa: E402
 from gpu_core.evaluation.protocol import evaluate_agent_on_split, print_result, write_rows_csv  # noqa: E402
 from gpu_core.learning.evaluation import is_vehicle_checkpoint, load_vehicle_agent  # noqa: E402
 
@@ -73,7 +73,7 @@ def evaluate(args):
     if not is_vehicle_checkpoint(checkpoint):
         raise SystemExit("not a vehicle-level SAC / PD-RSAC checkpoint; use evaluate_mappo.py or evaluate_maddpg.py")
     config, trained_milp = create_config(args, checkpoint)
-    run = build_run(config, device, split=args.split, synthetic=args.synthetic)
+    run = build_run(config, SIM_DEVICE, split=args.split, synthetic=args.synthetic)
     agent = load_vehicle_agent(checkpoint, config, run.env, device, projected=run.projection is not None)
     label = args.label or Path(args.checkpoint).stem
     split = 'synthetic' if args.synthetic else args.split

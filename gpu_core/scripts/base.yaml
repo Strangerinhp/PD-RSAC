@@ -26,5 +26,5 @@ reward: {driving_cost_per_km: 0.3, electricity_cost_per_kwh: 0.18, wait_penalty_
   scale_factor: 100.0, max_wait_steps: 6}
 physics: {battery_kwh: 50.0, reserve_kwh: 7.5, energy_per_km: 0.2, charge_efficiency: 0.95, avg_speed_kmh: 25.0}
 vehicle: {initial_energy_range: [0.5, 0.9], low_energy_fraction: 0.2}
-station: {num_ports: 5, max_power: 50.0, min_power: 20.0, feeder_kw: 5000.0, cover_rings: 2, cover_min_daily_pickups: 1.0}
+station: {num_ports: 5, max_power: 50.0, min_power: 20.0, feeder_kw: 5500.0, cover_rings: 2, cover_min_daily_pickups: 1.0}
 milp: {mu: 4.0, tau_max: 0.5, warm_start: true, threads: 0, strict: true}

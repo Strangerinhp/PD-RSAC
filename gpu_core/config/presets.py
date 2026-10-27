@@ -45,11 +45,6 @@ def _fixed_gamma(milp: bool) -> Dict[str, Any]:
             "agent.semi_mdp": False, "agent.critic_population": True}
 
 
-def _semi_mdp_baseline(milp: bool) -> Dict[str, Any]:
-    """MAPPO, MADDPG: no WDRO, gamma^Delta per transition like PD-RSAC."""
-    return {**_fixed_gamma(milp), "agent.semi_mdp": True}
-
-
 PRESETS: Dict[str, Preset] = {p.name: p for p in (
     Preset("full", "wdro", _pd_rsac(), "PD-RSAC"),
     Preset("no_milp", "wdro", _pd_rsac(milp__enabled=False), "ablation: raw executor instead of the MILP"),
@@ -58,10 +53,10 @@ PRESETS: Dict[str, Preset] = {p.name: p for p in (
     Preset("iac", "wdro", _pd_rsac(agent__critic_population=False), "ablation: critic without m_i"),
     Preset("sac_milp", "sac", _pd_rsac(wdro__enabled=False), "ablation 'w/o WDRO': PD-RSAC without the robust target (semi-MDP kept, Q12b round 7)"),
     Preset("sac", "sac", _fixed_gamma(False), "baseline"),
-    Preset("mappo", "mappo", _semi_mdp_baseline(False), "baseline (semi-MDP)"),
-    Preset("mappo_milp", "mappo", _semi_mdp_baseline(True), "baseline (semi-MDP)"),
-    Preset("maddpg", "maddpg", _semi_mdp_baseline(False), "baseline (semi-MDP)"),
-    Preset("maddpg_milp", "maddpg", _semi_mdp_baseline(True), "baseline (semi-MDP)"),
+    Preset("mappo", "mappo", _fixed_gamma(False), "baseline"),
+    Preset("mappo_milp", "mappo", _fixed_gamma(True), "baseline"),
+    Preset("maddpg", "maddpg", _fixed_gamma(False), "baseline"),
+    Preset("maddpg_milp", "maddpg", _fixed_gamma(True), "baseline"),
     Preset("greedy", None, _fixed_gamma(False), "heuristic VIII-B", trainable=False),
 )}
 

@@ -528,7 +528,7 @@ def main(argv=None):
     p.add_argument("--cover-min-daily-pickups", type=float, default=1.0)
     p.add_argument("--sample-ratio", type=float, default=0.12)
     p.add_argument("--charge-power-kw", type=float, default=50.0)
-    p.add_argument("--feeder-kw", type=float, default=5000.0)
+    p.add_argument("--feeder-kw", type=float, default=5500.0)
     a = p.parse_args(argv)
     m = build_manifest(a.processed_root, a.datasets, a.train_start, a.train_end, a.resolution, a.coverage,
                        a.num_stations, a.ports_per_station, a.cover_rings, a.cover_min_daily_pickups,

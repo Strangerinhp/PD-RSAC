@@ -123,8 +123,8 @@ class StationConfig:
     num_ports: int = 5
     max_power: float = 50.0                # P_max^s per port, kW
     min_power: float = 20.0                # p_min when charging under the projection, kW
-    feeder_kw: float = 5000.0              # P_feed: enforced by the MILP projection, measured on the raw path (Q9);
-                                           # 5000 kW binds ~10-25 % of the time at the 12 % sample (7000 kW: < 1 %)
+    feeder_kw: float = 5500.0              # P_feed: enforced by the MILP projection, measured on the raw path (Q9);
+                                           # 5500 kW binds ~4-11 % of the time at the 12 % sample (5000 kW: 7-20 %, 7000 kW: < 1 %)
     # Placement is done once by the manifest builder (cover-then-fill, Q13b); these
     # values are recorded here so the run config states what the manifest must contain.
     cover_rings: int = 2

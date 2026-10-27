@@ -8,8 +8,8 @@ learning rule:
   Gaussian exploration noise in u-space while collecting; evaluation uses the joint mode and mu;
 - one critic Q(o_i, a_i, m_i, g) on the executed action (local population critic; the
   'centralised' information is m_i and g), target y = R + (1 - done) d Qbar(s', Pi-hat(mu_bar(s')))
-  with the target actor and target critic; d = gamma^Delta with ``agent.semi_mdp`` (the presets),
-  else gamma per decision;
+  with the target actor and target critic; d = gamma per decision (the presets, Q12), or
+  gamma^Delta with ``agent.semi_mdp``;
 - actor loss -Q(s, Pi-hat(mu(s))) through Pi-hat with straight-through gradients, no entropy;
 - Polyak tau = training.tau (0.005) for the encoder, critic and actor (Q11).
 """
